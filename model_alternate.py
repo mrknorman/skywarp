@@ -7,7 +7,7 @@ import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 tf.debugging.set_log_device_placement(True)
-gpus = tf.config.list_logical_devices('GPU')
+gpus = [0] #tf.config.list_logical_devices('GPU')
 strategy = tf.distribute.MirroredStrategy(gpus)
 
 def transformer_encoder(inputs, head_size, num_heads, ff_dim, dropout=0):
@@ -26,6 +26,27 @@ def transformer_encoder(inputs, head_size, num_heads, ff_dim, dropout=0):
     x = layers.Conv1D(filters=inputs.shape[-1], kernel_size=1)(x)
     return x + res
 
+
+# def positional_enc(seq_len: int, model_dim: int) -> tf.Tensor:
+#     """
+#     Computes pre-determined postional encoding as in (Vaswani et al., 2017).
+#     """
+#     pos = np.arange(seq_len)[..., None]
+#     dim = np.arange(model_dim, step=2)
+    
+#     frequencies = 1.0 / np.power(10000, (dim / model_dim))
+    
+#     positional_encoding_table = np.zeros(seq_len, model_dim)
+#     positional_encoding_table[:, 0::2] = np.sin(pos * frequencies)
+#     positional_encoding_table[:, 1::2] = np.cos(pos * frequencies)
+    
+#     return tf.cast(positional_encoding_table, tf.float32)
+
+"""
+We might need an embedding prior to the positional encoding, or 
+to set (model_dim = 1) such that the shapes line up. 
+"""
+
 def build_model(
     input_shape,
     head_size,
@@ -39,6 +60,14 @@ def build_model(
     inputs = keras.Input(shape=input_shape)
     x = inputs
     x = layers.AveragePooling1D(8)(x)
+    
+    # positional encoding
+    # seq_len = 1024 
+    # model_dim = num_heads * head_size
+    # positional_enc = positional_encoding(seq_len, model_dim) # or model_dim=1 
+    # x += positional_enc[:x.shape[1]]
+    # x = layers.dropout(dropout)
+    
     for _ in range(num_transformer_blocks):
         x = transformer_encoder(x, head_size, num_heads, ff_dim, dropout)
 
@@ -50,14 +79,15 @@ def build_model(
     return keras.Model(inputs, outputs)
 
 noise_x  = np.load("/home/michael.norman/dragon/tools/numpy_datasets/starscream_noise_1.npy")
-noise_y  = np.zeros(noise_x.shape[0], dtype = np.int64)
+noise_y  = np.zeros(noise_x.shape[0], dtype = np.int32)
 signal_x = np.load("/home/michael.norman/dragon/tools/numpy_datasets/starscream_signal_1.npy")
-signal_y = np.ones(signal_x.shape[0], dtype = np.int64)
+signal_y = np.ones(signal_x.shape[0], dtype = np.int32)
 
 x = np.concatenate((noise_x, signal_x))
 y = np.concatenate((noise_y, signal_y))
 
 idx = np.random.permutation(len(x))
+
 x = x[idx]
 y = y[idx]
 
@@ -70,7 +100,6 @@ y_test  = y[int(0.05*len(x)):]
 n_classes = len(np.unique(y_train))
 
 input_shape = x_train.shape[1:]
-
 with strategy.scope():
 
     model = build_model(
