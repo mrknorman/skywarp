@@ -5,9 +5,10 @@ from tensorflow.keras import layers
 
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1,3,5'
 
 tf.debugging.set_log_device_placement(True)
-gpus = [0] #tf.config.list_logical_devices('GPU')
+gpus =  tf.config.list_logical_devices('GPU')
 strategy = tf.distribute.MirroredStrategy(gpus)
 
 def transformer_encoder(inputs, head_size, num_heads, ff_dim, dropout=0):
@@ -27,20 +28,20 @@ def transformer_encoder(inputs, head_size, num_heads, ff_dim, dropout=0):
     return x + res
 
 
-# def positional_enc(seq_len: int, model_dim: int) -> tf.Tensor:
-#     """
-#     Computes pre-determined postional encoding as in (Vaswani et al., 2017).
-#     """
-#     pos = np.arange(seq_len)[..., None]
-#     dim = np.arange(model_dim, step=2)
+def positional_enc(seq_len: int, model_dim: int) -> tf.Tensor:
+    """
+    Computes pre-determined postional encoding as in (Vaswani et al., 2017).
+    """
+    pos = np.arange(seq_len)[..., None]
+    dim = np.arange(model_dim, step=2)
     
-#     frequencies = 1.0 / np.power(10000, (dim / model_dim))
+    frequencies = 1.0 / np.power(10000, (dim / model_dim))
     
-#     positional_encoding_table = np.zeros(seq_len, model_dim)
-#     positional_encoding_table[:, 0::2] = np.sin(pos * frequencies)
-#     positional_encoding_table[:, 1::2] = np.cos(pos * frequencies)
+    positional_encoding_table = np.zeros((seq_len, model_dim))
+    positional_encoding_table[:, 0::2] = np.sin(pos * frequencies)
+    positional_encoding_table[:, 1::2] = np.cos(pos * frequencies)
     
-#     return tf.cast(positional_encoding_table, tf.float32)
+    return tf.cast(positional_encoding_table, tf.float32)
 
 """
 We might need an embedding prior to the positional encoding, or 
@@ -62,11 +63,11 @@ def build_model(
     x = layers.AveragePooling1D(8)(x)
     
     # positional encoding
-    # seq_len = 1024 
-    # model_dim = num_heads * head_size
-    # positional_enc = positional_encoding(seq_len, model_dim) # or model_dim=1 
-    # x += positional_enc[:x.shape[1]]
-    # x = layers.dropout(dropout)
+    seq_len = 1024 
+    model_dim = num_heads * head_size
+    positional_encoding = positional_enc(seq_len, model_dim) # or model_dim=1 
+    x += positional_encoding[:x.shape[1]]
+    x = layers.Dropout(dropout)(x)
     
     for _ in range(num_transformer_blocks):
         x = transformer_encoder(x, head_size, num_heads, ff_dim, dropout)
@@ -104,18 +105,18 @@ with strategy.scope():
 
     model = build_model(
         input_shape,
-        head_size=256,
+        head_size=8,
         num_heads=4,
         ff_dim=4,
         num_transformer_blocks=4,
         mlp_units=[128],
-        mlp_dropout=0.4,
-        dropout=0.25,
+        mlp_dropout=0.,
+        dropout=0.,
     )
 
     model.compile(
         loss="sparse_categorical_crossentropy",
-        optimizer=keras.optimizers.Adam(learning_rate=1e-4),
+        optimizer=keras.optimizers.Adam(learning_rate=1e-5),
         metrics=["sparse_categorical_accuracy"],
     )
     model.summary()
