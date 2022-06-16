@@ -1,0 +1,29 @@
+## Trial and Error history:
+
+-- 1024 --
+1. train: 95, validation: 88; 
+	# dropout = none;
+	# num_heads = 4; 
+	# head_size = 8; 
+	# ff_dim = 4; 
+	# num_blocks = 4; 
+	# postion_encoding_scale = 10000; 
+	# lr = 10e-5.
+2. train: 99, validation: 97.5;
+	# Dropout 10%; 
+	# num_heads = 4. 
+	# head_size = 8;
+	# ff_dim = 4; 
+	# num_blocks = 4; 
+	# postion_encoding_scale = 1000; 
+	# lr = 10e-4.
+	
+-- 1024 Conv --
+	2. train: 99, validation: 97.5;
+	# Dropout 10%; 
+	# num_heads = 4. 
+	# head_size = 8;
+	# ff_dim = 4; 
+	# num_blocks = 4; 
+	# postion_encoding_scale = 1000; 
+	# lr = 10e-4.
