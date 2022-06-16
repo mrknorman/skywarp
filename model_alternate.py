@@ -27,6 +27,9 @@ def transformer_encoder(inputs, head_size, num_heads, ff_dim, dropout=0):
     x = layers.Conv1D(filters=inputs.shape[-1], kernel_size=1)(x)
     return x + res
 
+"""
+maybe 
+"""
 
 def positional_enc(seq_len: int, model_dim: int) -> tf.Tensor:
     """
@@ -35,7 +38,7 @@ def positional_enc(seq_len: int, model_dim: int) -> tf.Tensor:
     pos = np.arange(seq_len)[..., None]
     dim = np.arange(model_dim, step=2)
     
-    frequencies = 1.0 / np.power(10000, (dim / model_dim))
+    frequencies = 1.0 / np.power(1000, (dim / model_dim))
     
     positional_encoding_table = np.zeros((seq_len, model_dim))
     positional_encoding_table[:, 0::2] = np.sin(pos * frequencies)
@@ -43,10 +46,6 @@ def positional_enc(seq_len: int, model_dim: int) -> tf.Tensor:
     
     return tf.cast(positional_encoding_table, tf.float32)
 
-"""
-We might need an embedding prior to the positional encoding, or 
-to set (model_dim = 1) such that the shapes line up. 
-"""
 
 def build_model(
     input_shape,
@@ -55,8 +54,8 @@ def build_model(
     ff_dim,
     num_transformer_blocks,
     mlp_units,
-    dropout=0,
-    mlp_dropout=0,
+    dropout,
+    mlp_dropout,
 ):
     inputs = keras.Input(shape=input_shape)
     x = inputs
@@ -103,20 +102,24 @@ n_classes = len(np.unique(y_train))
 input_shape = x_train.shape[1:]
 with strategy.scope():
 
+    """
+    Currently the model has d_model = 32 which is quite small, so we will want to increase this. 
+    """
+    
     model = build_model(
         input_shape,
         head_size=8,
-        num_heads=4,
+        num_heads=4, # increase to 8
         ff_dim=4,
         num_transformer_blocks=4,
         mlp_units=[128],
-        mlp_dropout=0.,
-        dropout=0.,
+        mlp_dropout=0.10,
+        dropout=0.10,
     )
 
     model.compile(
         loss="sparse_categorical_crossentropy",
-        optimizer=keras.optimizers.Adam(learning_rate=1e-5),
+        optimizer=keras.optimizers.Adam(learning_rate=1e-4),
         metrics=["sparse_categorical_accuracy"],
     )
     model.summary()
