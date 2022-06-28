@@ -5,9 +5,8 @@ from tensorflow.keras import layers
 
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-os.environ['CUDA_VISIBLE_DEVICES'] = '1,3,5'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0,3,5'
 
-tf.debugging.set_log_device_placement(True)
 gpus =  tf.config.list_logical_devices('GPU')
 strategy = tf.distribute.MirroredStrategy(gpus)
 
@@ -58,13 +57,16 @@ def build_model(
     mlp_dropout,
 ):
     inputs = keras.Input(shape=input_shape)
+
     x = inputs
-    x = layers.AveragePooling1D(8)(x)
-    
+    x = layers.Conv1D(1, 8)(x)
+    x = layers.MaxPooling1D(8)(x)
+        
     # positional encoding
-    seq_len = 1024 
+    seq_len = 1023
     model_dim = num_heads * head_size
     positional_encoding = positional_enc(seq_len, model_dim) # or model_dim=1 
+    
     x += positional_encoding[:x.shape[1]]
     x = layers.Dropout(dropout)(x)
     
