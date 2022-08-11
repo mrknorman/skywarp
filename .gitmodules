@@ -1,0 +1,3 @@
+[submodule "mly"]
+	path = mly
+	url = https://git.ligo.org/mly/mly.git
