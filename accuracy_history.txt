@@ -1,5 +1,7 @@
 ## Trial and Error history:
 
+Currently, we are not able to extend the model above a sequence length of 1024
+
 -- 1024 --
 1. train: 95, validation: 88; 
 	# dropout = none;
@@ -9,6 +11,7 @@
 	# num_blocks = 4; 
 	# postion_encoding_scale = 10000; 
 	# lr = 10e-5.
+
 2. train: 99, validation: 97.5;
 	# Dropout 10%; 
 	# num_heads = 4. 
@@ -27,3 +30,167 @@
 	# num_blocks = 4; 
 	# postion_encoding_scale = 1000; 
 	# lr = 10e-4.
+
+
+-- 8192 -- 
+1.  train: 97, validation: 94.6
+    # Dropout 10%
+    # num_heads = 4
+    # head_size = 8
+    # ff_dim = 4, 
+    # num_blocks = 4
+    # positional_encoding_scale = 1000
+    # lr = 10e-4
+    # sequence_length = 512 (8192)
+    # model_dim = 32
+    # projection (no activation)
+    
+2. train: 97, validation: 96
+    # Dropout 10%
+    # num_heads = 4
+    # head_size = 8
+    # ff_dim = 4, 
+    # num_blocks = 6
+    # positional_encoding_scale = 1000
+    # lr = 10e-4
+    # sequence_length = 512 (8192)
+    # model_dim = 32
+    # projection (no activation)
+    
+2. train: 98.12, validation: 95.6
+    # Dropout 10%
+    # num_heads = 4
+    # head_size = 8
+    # ff_dim = 4, 
+    # num_blocks = 6
+    # positional_encoding_scale = 512
+    # lr = 10e-4
+    # sequence_length = 512 
+    # model_dim = 32
+    # projection (no activation)
+    
+3. train: 97.9 , validation: 90.8
+    # Dropout 10%
+    # num_heads = 8
+    # head_size = 8
+    # ff_dim = 4, 
+    # num_blocks = 6
+    # positional_encoding_scale = 512
+    # lr = 10e-4
+    # sequence_length = 512 
+    # model_dim = 64
+    # projection (no activation)
+    
+4. train: 96.94, validation: 96.94  
+    # Dropout 10%
+    # num_heads = 4
+    # head_size = 8
+    # ff_dim = 4, 
+    # num_blocks = 6
+    # positional_encoding_scale = 512
+    # lr = 10e-4
+    # sequence_length = 256
+    # model_dim = 32
+    # projection (no activation)
+
+5. train: 97.9, validation: 97.26
+    # Dropout 10%
+    # num_heads = 4
+    # head_size = 8
+    # ff_dim = 4, 
+    # num_blocks = 6
+    # positional_encoding_scale = 512
+    # lr = 10e-4
+    # sequence_length = 256
+    # model_dim = 32
+    # projection (no activation)
+    
+6. train: 98.2, validation: 95.1
+    # Dropout 10%
+    # num_heads = 6
+    # head_size = 8
+    # ff_dim = 4, 
+    # num_blocks = 6
+    # positional_encoding_scale = 512
+    # lr = 10e-4
+    # sequence_length = 512
+    # model_dim = 48
+    # projection (no activation)    
+ 
+7. train: 93.3, validation: 93.8
+    # Dropout 10%
+    # num_heads = 4
+    # head_size = 8
+    # ff_dim = 4, 
+    # num_blocks = 6
+    # positional_encoding_scale = 512
+    # lr = 10e-4
+    # sequence_length = 512
+    # model_dim = 32
+    # projection (no activation) 
+    # channels_last average pooling (previous were channels_first)
+    
+8. train: 98.3, validation: 97.2
+    # Dropout 10%
+    # num_heads = 8
+    # head_size = 64
+    # ff_dim = 4, 
+    # num_blocks = 6
+    # positional_encoding_scale = 1000
+    # lr = 10e-4
+    # sequence_length = 512
+    # model_dim = 512
+    # projection (no activation)
+    
+9. train: 98.5, validation: 97.8
+    # Dropout 10%
+    # num_heads = 8
+    # head_size = 64
+    # ff_dim = 4, 
+    # num_blocks = 8
+    # positional_encoding_scale = 1000
+    # lr = 10e-4
+    # sequence_length = 512
+    # model_dim = 512
+    # projection (no activation)
+    
+10. train: 98.7, validation: 97.6
+    # Dropout 10%
+    # num_heads = 4
+    # head_size = 8
+    # ff_dim = 4, 
+    # num_blocks = 8
+    # positional_encoding_scale = 1000
+    # lr = 10e-4
+    # sequence_length = 512
+    # model_dim = 32
+    # projection (no activation)
+    # switched convolutions to dense layers
+    
+11. train: 99.1, validation: 97.4
+    # Dropout 10%
+    # num_heads = 4
+    # head_size = 8
+    # ff_dim = 4, 
+    # num_blocks = 8
+    # positional_encoding_scale = 1000
+    # lr = 10e-4
+    # sequence_length = 512
+    # model_dim = 32
+    # projection (no activation)
+    # switched convolutions to dense layers
+    # mlp_dim = 256
+    
+12. train: 99.7, validation: 94.8
+    # Dropout 10%
+    # num_heads = 4
+    # head_size = 8
+    # ff_dim = 4, 
+    # num_blocks = 8
+    # positional_encoding_scale = 1000
+    # lr = 10e-4
+    # sequence_length = 512
+    # model_dim = 32
+    # projection (no activation)
+    # switched convolutions to dense layers
+    # mlp_dim = 512
