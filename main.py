@@ -1,44 +1,23 @@
 import tensorflow as tf
+
+from tensorflow.keras import mixed_precision
+
 import numpy as np
 
 from tensorflow import keras
 from tensorflow.data import Dataset
 from tensorflow.keras import layers
 
+import matplotlib.pyplot as plt
+
+from common_functions import *
+
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
-gpus = tf.config.list_logical_devices('GPU')
-strategy = tf.distribute.MirroredStrategy(gpus)
+strategy = setup_CUDA(True, "1,2,3")
 
-def loadDatasets(noise_path, signal_path):
-    noise = tf.data.experimental.load(noise_path)
-    noise_labels = Dataset.from_tensor_slices(
-        np.zeros(len(noise), dtype=np.float16))
-
-    noise = Dataset.zip((noise, noise_labels))
-
-    signal = tf.data.experimental.load(signal_path)
-    signal_labels = Dataset.from_tensor_slices(
-        np.ones(len(signal), dtype=np.float16))
-
-    signal = Dataset.zip((signal, signal_labels))
-
-    return noise.concatenate(signal)
-
-def splitTestTrain(dataset, fraction):
-    dataset_size = dataset.cardinality().numpy()
-    test_size = test_fraction * dataset_size
-
-    dataset = dataset.shuffle(dataset_size)
-    test_dataset = dataset.take(test_size)
-    train_dataset = dataset.skip(test_size)
-
-    return test_dataset, train_dataset
-
-def getElementShape(dataset):
-
+def get_element_shape(dataset):
     for element in dataset:
         return element[0].shape[1:]
 
@@ -61,6 +40,7 @@ def transformer_encoder(inputs, head_size, num_heads, ff_dim, dropout=0):
     x = layers.Dropout(dropout)(x)
     return x + res
 
+
 def positional_enc(seq_len: int, model_dim: int) -> tf.Tensor:
     """
     Computes pre-determined postional encoding as in (Vaswani et al., 2017).
@@ -75,6 +55,7 @@ def positional_enc(seq_len: int, model_dim: int) -> tf.Tensor:
     positional_encoding_table[:, 1::2] = np.cos(pos * frequencies)
 
     return tf.cast(positional_encoding_table, tf.float32)
+
 
 def build_model(
     input_shape,
@@ -120,40 +101,56 @@ def build_model(
 if __name__ == "__main__":
 
     # User parameters:
-    noise_path = "datasets/noise_1"
-    signal_path = "datasets/cbc_snr_10"
+    noise_paths = ["datasets/noise_1"]
+    signal_paths = ["datasets/cbc_10"]
     
+    validation_signal_paths = ["datasets/cbc_10_e", "datasets/cbc_9_e", "datasets/cbc_8_e", "datasets/cbc_7_e", "datasets/cbc_6_e"]
+    validation_noise_paths  = ["datasets/noise_0_v"]
+    
+    model_path = "models/starscream_regular_c_10"
+
     validation_fraction = 0.05
-    test_fraction       = 0.1
+    test_fraction = 0.1
 
     model_config = dict(
-        head_size=8,
-        num_heads=4,
-        ff_dim=4,
-        num_transformer_blocks=6,
+        head_size=16,
+        num_heads=8,
+        ff_dim=8,
+        num_transformer_blocks=8,
         mlp_units=[512],
-        mlp_dropout=0.10,
+        mlp_dropout=0.1,
         dropout=0.1
     )
 
     training_config = dict(
-        learning_rate = 1e-4,
+        learning_rate=1e-4,
         patience=10,
         epochs=200,
-        batch_size=64
+        batch_size=32
     )
 
     # Load Dataset:
-    dataset = loadDatasets(noise_path, signal_path).batch(batch_size=32)
+    train_dataset = load_noise_signal_datasets(
+        noise_paths, signal_paths).batch(
+        batch_size=training_config["batch_size"])
 
     # Split Dataset:
-    test_dataset, train_dataset = splitTestTrain(dataset, test_fraction)
-    validation_dataset, train_dataset = splitTestTrain(train_dataset, validation_fraction)
+    signal_v_dataset = load_label_datasets(validation_signal_paths, 1)
+    noise_v_dataset = load_label_datasets(validation_noise_paths, 0)
+    
+    noise_v_dataset = noise_v_dataset.take(len(signal_v_dataset))
+    validation_dataset = signal_v_dataset.concatenate(noise_v_dataset).batch(
+            batch_size=training_config["batch_size"]
+        )
+    
+    validation_dataset, test_dataset = split_test_train(
+        validation_dataset, 0.5)
+    
+    train_dataset = train_dataset.shuffle(len(train_dataset))
 
     # Get Signal Element Shape:
-    input_shape = getElementShape(train_dataset)
-    
-    print(input_shape)
+    input_shape = get_element_shape(train_dataset)
+
     with strategy.scope():
 
         model = build_model(
@@ -172,9 +169,16 @@ if __name__ == "__main__":
         callbacks = [
             keras.callbacks.EarlyStopping(
                 patience=training_config["patience"],
-                restore_best_weights=True)]
+                restore_best_weights=True),
+            keras.callbacks.ModelCheckpoint(
+                model_path,
+                monitor="val_loss",
+                save_best_only=True,
+                save_freq="epoch", 
+            )
+        ]
 
-        model.fit(
+        history = model.fit(
             train_dataset,
             validation_data=validation_dataset,
             epochs=training_config["epochs"],
@@ -183,5 +187,24 @@ if __name__ == "__main__":
             callbacks=callbacks
         )
 
+        model.save(model_path)
+
+        plt.figure()
+        plt.plot(history.history['acc'])
+        plt.plot(history.history['val_acc'])
+        plt.title('model accuracy')
+        plt.ylabel('accuracy')
+        plt.xlabel('epoch')
+        plt.legend(['train', 'validation'], loc='upper left')
+        plt.savefig("accuracy_history")
+
+        plt.figure()
+        plt.plot(history.history['loss'])
+        plt.plot(history.history['val_loss'])
+        plt.title('model loss')
+        plt.ylabel('loss')
+        plt.xlabel('epoch')
+        plt.legend(['train', 'validation'], loc='upper left')
+        plt.savefig("loss_history")
+
         model.evaluate(test_dataset, verbose=1)
-        model.save("starscream2")
