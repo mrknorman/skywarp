@@ -13,9 +13,9 @@ import matplotlib.pyplot as plt
 from common_functions import *
 
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
 
-strategy = setup_CUDA(True, "1,2,3")
+strategy = setup_CUDA(True, "0,2,3,5")
 
 def get_element_shape(dataset):
     for element in dataset:
@@ -57,11 +57,10 @@ def positional_enc(seq_len: int, model_dim: int) -> tf.Tensor:
     return tf.cast(positional_encoding_table, tf.float32)
 
 
-def build_model(
+def build_transformer(
     input_shape,
     config
 ):
-
     # Unpack dict:
 
     head_size = config["head_size"]
@@ -83,7 +82,7 @@ def build_model(
     positional_encoding = positional_enc(seq_len, model_dim)  # or model_dim=1
 
     # projection to increase the size of the model
-    x = layers.Conv1D(model_dim, 1)(x)  # was Conv1D
+    x = layers.Conv1D(model_dim, 1)(x) 
     x += positional_encoding[:x.shape[1]]
     x = layers.Dropout(dropout)(x)
 
@@ -97,27 +96,52 @@ def build_model(
     outputs = layers.Dense(2, activation="softmax")(x)
     return keras.Model(inputs, outputs)
 
+def build_cnn(
+    input_shape,
+    config
+):
+    
+    inputs = keras.Input(shape=input_shape)
+    x = layers.Reshape((input_shape[-1], 1))(inputs)
 
+    x = layers.Conv1D(64, 8, activation="elu")(x) 
+    x = layers.MaxPool1D(8)(x) 
+    x = layers.Conv1D(32, 8, activation="elu")(x) 
+    x = layers.Conv1D(32, 16, activation="elu")(x) 
+    x = layers.MaxPool1D(6)(x) 
+    x = layers.Conv1D(16, 16, activation="elu")(x) 
+    x = layers.Conv1D(16, 32, activation="elu")(x) 
+    #x = layers.MaxPool1D(4)(x) 
+    x = layers.Conv1D(16, 32, activation="elu")(x) 
+    x = layers.Flatten()(x)
+    x = layers.Dense(64, activation="elu")(x) 
+    x = layers.Dropout(0.5)(x) 
+    x = layers.Dense(64, activation="elu")(x) 
+    x = layers.Dropout(0.5)(x) 
+    outputs = layers.Dense(2, activation="softmax")(x) 
+        
+    return keras.Model(inputs, outputs)
+    
 if __name__ == "__main__":
 
     # User parameters:
-    noise_paths = ["datasets/noise_1"]
-    signal_paths = ["datasets/cbc_10"]
+    noise_paths  = ["datasets/noise_1",  "datasets/noise_2",  "datasets/noise_3"]
+    signal_paths = ["datasets/cbc_10_0", "datasets/cbc_10_1", "datasets/cbc_10_2"]
     
-    validation_signal_paths = ["datasets/cbc_10_e", "datasets/cbc_9_e", "datasets/cbc_8_e", "datasets/cbc_7_e", "datasets/cbc_6_e"]
+    validation_signal_paths = ["datasets/cbc_10_e"]
     validation_noise_paths  = ["datasets/noise_0_v"]
     
-    model_path = "models/starscream_regular_c_10"
+    model_path = "models/skywarp_large_c_10_3"
 
     validation_fraction = 0.05
     test_fraction = 0.1
 
     model_config = dict(
-        head_size=16,
-        num_heads=8,
-        ff_dim=8,
-        num_transformer_blocks=8,
-        mlp_units=[512],
+        head_size=32,
+        num_heads=10,
+        ff_dim=10,
+        num_transformer_blocks=10,
+        mlp_units=[1024],
         mlp_dropout=0.1,
         dropout=0.1
     )
@@ -138,7 +162,6 @@ if __name__ == "__main__":
     signal_v_dataset = load_label_datasets(validation_signal_paths, 1)
     noise_v_dataset = load_label_datasets(validation_noise_paths, 0)
     
-    noise_v_dataset = noise_v_dataset.take(len(signal_v_dataset))
     validation_dataset = signal_v_dataset.concatenate(noise_v_dataset).batch(
             batch_size=training_config["batch_size"]
         )
@@ -153,7 +176,7 @@ if __name__ == "__main__":
 
     with strategy.scope():
 
-        model = build_model(
+        model =  build_transformer(
             input_shape,
             model_config
         )

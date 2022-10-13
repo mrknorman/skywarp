@@ -86,8 +86,10 @@ def binaryAccuracyFromOneHot(one_hot_score):
 if __name__ == "__main__":
     # User parameters:
     noise_paths = ["datasets/noise_0_v"]
+    
+    model_name = skywarp_large_c_10_3
 
-    model = tf.keras.models.load_model("./models/starscream_regular_c_10")
+    model = tf.keras.models.load_model(f"./models/{model_name}")
     
     """
     print("Signal")
@@ -127,19 +129,13 @@ if __name__ == "__main__":
     """
 
     noise_ds = load_datasets(noise_paths)    
-    one_hot_scores = validate_model_scores(model, noise_ds)
-    scores = one_hot_scores[:,0]
-    scores  = np.sort(scores)[::-1]
-
-    print(scores[-10:])
-
-    print(len(scores[scores < 0.5])/len(scores))
-    print(len(scores[scores < 0.1])/len(scores))
-    print(len(scores[scores < 0.01])/len(scores))
-    print(len(scores[scores < 0.001])/len(scores))
+    #noise_ds = noise_ds.take(1000)
     
-    plt.loglog(scores)
-    plt.savefig("FAR_plot")
+    one_hot_scores = validate_model_scores(model, noise_ds)
+    scores = one_hot_scores[:,1]
+    scores = np.sort(scores)[::1]
+    
+    np.save(f"./far_scores/{model_name}", scores)
     
     quit()
 
@@ -147,5 +143,6 @@ if __name__ == "__main__":
 
     print("Noise")
     print(model.evaluate(noise_ds.batch(batch_size = 32), verbose=1, return_dict = True))
+
 
 

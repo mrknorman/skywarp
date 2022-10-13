@@ -5,9 +5,6 @@ import numpy as np
 import tensorflow as tf
 import os
 
-
-tf.keras.backend.set_floatx('float16')
-
 def setup_CUDA(verbose, device_num):
 		
 	os.environ["CUDA_VISIBLE_DEVICES"] = str(device_num)
@@ -32,8 +29,8 @@ def setup_CUDA(verbose, device_num):
 		
 	return strategy
 
-
-setup_CUDA(True, "1")
+strategy = setup_CUDA(True, "3")
+tf.keras.backend.set_floatx('float16')
 
 def generateDataset(config):
     
@@ -92,7 +89,7 @@ if __name__ == "__main__":
             disposition       = None,
             windowSize        = 16,
             plugins           = [],
-            dataset_name      = f"cbc_10_%i"
+            dataset_name      = f"cbc_10_{i}"
         )
 
         generateDataset(config)
