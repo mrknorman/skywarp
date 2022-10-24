@@ -7,6 +7,12 @@ from tensorflow import keras
 from tensorflow.data import Dataset
 from tensorflow.keras import layers
 
+from tensorflow.keras import mixed_precision
+
+policy = mixed_precision.Policy('mixed_float16')
+mixed_precision.set_global_policy(policy)
+
+
 import matplotlib.pyplot as plt
 
 from tqdm import tqdm
@@ -14,9 +20,9 @@ from tqdm import tqdm
 from common_functions import *
 
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
 
-setup_CUDA(True, "0")
+strategy = setup_CUDA(True, "0,3,4,5")
 
 def run_efficiency_plots(model, path_suffix, num_tests):
     
@@ -85,56 +91,29 @@ def binaryAccuracyFromOneHot(one_hot_score):
 
 if __name__ == "__main__":
     # User parameters:
-    noise_paths = ["datasets/noise_0_v"]
+    noise_paths = ["datasets/noise_0_v", "datasets/noise_1_v", "datasets/noise_2_v", "datasets/noise_3_v", "datasets/noise_4_v", "datasets/noise_5_v", "datasets/noise_6_v", "datasets/noise_7_v", "datasets/noise_8_v", "datasets/noise_9_v", "datasets/noise_10_v", "datasets/noise_11_v", "datasets/noise_12_v"]
     
-    model_name = skywarp_large_c_10_3
+    model_name = "skywarp_large_c_10_10"
 
     model = tf.keras.models.load_model(f"./models/{model_name}")
     
-    """
     print("Signal")
     path_suffix = "./datasets/cbc"
     acc, loss = run_efficiency_plots(model, path_suffix, 11)
+    np.save(f"./eff_plot_scores/{model_name}", (acc, loss))
     
-    fig = plt.figure()
-
-    ax = fig.add_subplot(111)
-
-    ax.set_xlabel('SNR ')
-    ax.set_ylabel('Accuracy ')
+    quit()
     
-    for axis in ['top','bottom','left','right']:
-        ax.spines[axis].set_linewidth(5)
+    scores = np.array([])
+    for path in noise_paths:
+        noise_ds = load_datasets([path])
 
-    ax.xaxis.label.set_color('white')        #setting up X-axis label color to yellow
-    ax.yaxis.label.set_color('white')          #setting up Y-axis label color to blue
+        with strategy.scope():
+            one_hot_scores = validate_model_scores(model, noise_ds)
 
-    ax.tick_params(axis='x', colors='white')    #setting up X-axis tick color to red
-    ax.tick_params(axis='y', colors='white')  #setting up Y-axis tick color to black
-
-    ax.spines['left'].set_color('white')        # setting up Y-axis tick color to red
-    ax.spines['bottom'].set_color('white')         #setting up above X-axis tick color to red
-    
-    ax.spines.right.set_visible(False)
-    ax.spines.top.set_visible(False)
-
-    plt.plot(acc, linewidth=5)
-    
-    plt.savefig("eff_acc_tiny_c.png", transparent=True)
-    
-    plt.figure()
-    plt.plot(loss)
-    plt.savefig("eff_loss_tiny_c.png")
-    
-    """
-
-    noise_ds = load_datasets(noise_paths)    
-    #noise_ds = noise_ds.take(1000)
-    
-    one_hot_scores = validate_model_scores(model, noise_ds)
-    scores = one_hot_scores[:,1]
+        scores = np.append(scores, one_hot_scores[:,1])
+        
     scores = np.sort(scores)[::1]
-    
     np.save(f"./far_scores/{model_name}", scores)
     
     quit()

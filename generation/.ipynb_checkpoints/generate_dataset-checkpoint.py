@@ -76,11 +76,11 @@ if __name__ == "__main__":
             duration          = 1,
             fs                = 8192,
             num_injections    = 81000,
-            labels            = {'type' : 'signal'},
+            labels            = {'type' : 'noise'},
             detectors         = 'H',
             backgroundType    = 'optimal',
             #Injection related:
-            injectionFolder   = './new_injections',
+            injectionFolder   = None, #'./new_injections',
             injectionSNR      = 10,
             injectionCrop     = 0.25,
             # More options:
@@ -89,7 +89,7 @@ if __name__ == "__main__":
             disposition       = None,
             windowSize        = 16,
             plugins           = [],
-            dataset_name      = f"cbc_10_{i}"
+            dataset_name      = f"noise_{i}"
         )
 
         generateDataset(config)

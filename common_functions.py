@@ -4,7 +4,7 @@ from tensorflow.keras import layers
 import numpy as np
 import os
 
-#tf.keras.backend.set_floatx('float16')
+tf.keras.backend.set_floatx('float16')
 
 def setup_CUDA(verbose, device_num):
 		

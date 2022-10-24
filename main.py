@@ -1,4 +1,7 @@
 import tensorflow as tf
+from tqdm import tqdm
+import tensorflow_datasets as tfds
+
 
 from tensorflow.keras import mixed_precision
 
@@ -15,11 +18,15 @@ from common_functions import *
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
 
-strategy = setup_CUDA(True, "0,2,3,5")
+strategy = setup_CUDA(True, "0,1,3,4,5")
+
+policy = mixed_precision.Policy('mixed_float16')
+mixed_precision.set_global_policy(policy)
+
 
 def get_element_shape(dataset):
     for element in dataset:
-        return element[0].shape[1:]
+        return element['strain'].shape[1:]
 
 def transformer_encoder(inputs, head_size, num_heads, ff_dim, dropout=0):
     # Normalization and Attention
@@ -41,6 +48,32 @@ def transformer_encoder(inputs, head_size, num_heads, ff_dim, dropout=0):
     return x + res
 
 
+class Time2Vec(keras.layers.Layer):
+    def __init__(self, kernel_size=1):
+        super(Time2Vec, self).__init__(trainable=True, name='Time2VecLayer')
+        self.k = kernel_size
+    
+    def build(self, input_shape):
+        # trend
+        self.wb = self.add_weight(name='wb',shape=(input_shape[1],),initializer='uniform',trainable=True)
+        self.bb = self.add_weight(name='bb',shape=(input_shape[1],),initializer='uniform',trainable=True)
+        # periodic
+        self.wa = self.add_weight(name='wa',shape=(1, input_shape[1], self.k),initializer='uniform',trainable=True)
+        self.ba = self.add_weight(name='ba',shape=(1, input_shape[1], self.k),initializer='uniform',trainable=True)
+        super(Time2Vec, self).build(input_shape)
+    
+    def call(self, inputs, **kwargs):
+        bias = self.wb * inputs + self.bb
+        dp = K.dot(inputs, self.wa) + self.ba
+        wgts = K.sin(dp) # or K.cos(.)
+
+        ret = K.concatenate([K.expand_dims(bias, -1), wgts], -1)
+        ret = K.reshape(ret, (-1, inputs.shape[1]*(self.k+1)))
+        return ret
+    
+    def compute_output_shape(self, input_shape):
+        return (input_shape[0], input_shape[1]*(self.k + 1))
+
 def positional_enc(seq_len: int, model_dim: int) -> tf.Tensor:
     """
     Computes pre-determined postional encoding as in (Vaswani et al., 2017).
@@ -54,7 +87,7 @@ def positional_enc(seq_len: int, model_dim: int) -> tf.Tensor:
     positional_encoding_table[:, 0::2] = np.sin(pos * frequencies)
     positional_encoding_table[:, 1::2] = np.cos(pos * frequencies)
 
-    return tf.cast(positional_encoding_table, tf.float32)
+    return tf.cast(positional_encoding_table, tf.float16)
 
 
 def build_transformer(
@@ -71,7 +104,7 @@ def build_transformer(
     mlp_dropout = config["mlp_dropout"]
     dropout = config["dropout"]
 
-    inputs = keras.Input(shape=input_shape)
+    inputs = keras.Input(shape=input_shape, name='strain')
 
     # rescale "chunking"
     x = layers.Reshape((512, 16))(inputs)
@@ -93,7 +126,7 @@ def build_transformer(
     for dim in mlp_units:
         x = layers.Dense(dim, activation="relu")(x)
         x = layers.Dropout(mlp_dropout)(x)
-    outputs = layers.Dense(2, activation="softmax")(x)
+    outputs = layers.Dense(2, activation="softmax", name = 'signal_present')(x)
     return keras.Model(inputs, outputs)
 
 def build_cnn(
@@ -118,30 +151,39 @@ def build_cnn(
     x = layers.Dropout(0.5)(x) 
     x = layers.Dense(64, activation="elu")(x) 
     x = layers.Dropout(0.5)(x) 
-    outputs = layers.Dense(2, activation="softmax")(x) 
+    outputs = layers.Dense(2, activation="softmax", kernel_regularizer='l2')(x) 
         
     return keras.Model(inputs, outputs)
-    
-if __name__ == "__main__":
 
-    # User parameters:
-    noise_paths  = ["datasets/noise_1",  "datasets/noise_2",  "datasets/noise_3"]
-    signal_paths = ["datasets/cbc_10_0", "datasets/cbc_10_1", "datasets/cbc_10_2"]
-    
+def getInput(element):
+    return (element['strain'], tf.cast(element['signal_present'], tf.float16))
+
+if __name__ == "__main__":
+#
+    data_dir = "./skywarp_dataset"
+
     validation_signal_paths = ["datasets/cbc_10_e"]
     validation_noise_paths  = ["datasets/noise_0_v"]
     
-    model_path = "models/skywarp_large_c_10_3"
+    model_name = "cnn_10_10"
+    model_path = f"models/{model_name}"
 
-    validation_fraction = 0.05
-    test_fraction = 0.1
-
-    model_config = dict(
+    model_config_large = dict(
         head_size=32,
         num_heads=10,
         ff_dim=10,
         num_transformer_blocks=10,
         mlp_units=[1024],
+        mlp_dropout=0.1,
+        dropout=0.1
+    )
+    
+    model_config = dict(
+        head_size=16,
+        num_heads=8,
+        ff_dim=8,
+        num_transformer_blocks=8,
+        mlp_units=[512],
         mlp_dropout=0.1,
         dropout=0.1
     )
@@ -154,10 +196,16 @@ if __name__ == "__main__":
     )
 
     # Load Dataset:
-    train_dataset = load_noise_signal_datasets(
-        noise_paths, signal_paths).batch(
-        batch_size=training_config["batch_size"])
-
+    train_dataset = tfds.load(
+        "skywarp_dataset",
+        data_dir = "skywarp_dataset"
+    )['train'].batch(batch_size=training_config["batch_size"])
+    
+    for i, data in enumerate(train_dataset.map(getInput, num_parallel_calls=tf.data.AUTOTUNE)):
+        print(data)
+        if i > 10:
+            break
+            
     # Split Dataset:
     signal_v_dataset = load_label_datasets(validation_signal_paths, 1)
     noise_v_dataset = load_label_datasets(validation_noise_paths, 0)
@@ -169,8 +217,6 @@ if __name__ == "__main__":
     validation_dataset, test_dataset = split_test_train(
         validation_dataset, 0.5)
     
-    train_dataset = train_dataset.shuffle(len(train_dataset))
-
     # Get Signal Element Shape:
     input_shape = get_element_shape(train_dataset)
 
@@ -202,7 +248,7 @@ if __name__ == "__main__":
         ]
 
         history = model.fit(
-            train_dataset,
+            train_dataset.map(getInput, num_parallel_calls=tf.data.AUTOTUNE),
             validation_data=validation_dataset,
             epochs=training_config["epochs"],
             batch_size=training_config["batch_size"],
@@ -213,13 +259,13 @@ if __name__ == "__main__":
         model.save(model_path)
 
         plt.figure()
-        plt.plot(history.history['acc'])
-        plt.plot(history.history['val_acc'])
+        plt.plot(history.history['sparse_categorical_accuracy'])
+        plt.plot(history.history['val_sparse_categorical_accuracy'])
         plt.title('model accuracy')
         plt.ylabel('accuracy')
         plt.xlabel('epoch')
         plt.legend(['train', 'validation'], loc='upper left')
-        plt.savefig("accuracy_history")
+        plt.savefig(f"accuracy_history_{model_name}")
 
         plt.figure()
         plt.plot(history.history['loss'])
@@ -228,6 +274,6 @@ if __name__ == "__main__":
         plt.ylabel('loss')
         plt.xlabel('epoch')
         plt.legend(['train', 'validation'], loc='upper left')
-        plt.savefig("loss_history")
+        plt.savefig(f"loss_history_{model_name}")
 
         model.evaluate(test_dataset, verbose=1)
