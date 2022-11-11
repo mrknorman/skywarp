@@ -302,7 +302,7 @@ if __name__ == "__main__":
         plt.ylabel('accuracy')
         plt.xlabel('epoch')
         plt.legend(['train', 'validation'], loc='upper left')
-        plt.savefig(f"accuracy_history_{model_name}")
+        plt.savefig(f"./plots/accuracy_history_{model_name}")
 
         plt.figure()
         plt.plot(history.history['loss'])
@@ -311,6 +311,6 @@ if __name__ == "__main__":
         plt.ylabel('loss')
         plt.xlabel('epoch')
         plt.legend(['train', 'validation'], loc='upper left')
-        plt.savefig(f"loss_history_{model_name}")
+        plt.savefig(f"./plots/loss_history_{model_name}")
 
         model.evaluate(test_dataset, verbose=1)

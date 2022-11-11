@@ -118,7 +118,7 @@ def plotFAR(model_names, fars, restriction):
     ax1.set_ylabel("False Alarms per Second")    
     pres_format(ax1)
     
-    plt.savefig("FAR_plot", transparent=True)
+    plt.savefig("./plots/FAR_plot", transparent=True)
     
     return score_thresholds
 
@@ -171,7 +171,7 @@ def plotEff(model_names, threshold):
 
     pres_format(ax1)
     
-    plt.savefig(f"plot_eff_{str(far).replace('.', '')}.png", transparent=True)
+    plt.savefig(f"./plots/plot_eff_{str(far).replace('.', '')}.png", transparent=True)
     
 if __name__ == "__main__":
     restriction = 0
@@ -228,8 +228,8 @@ if __name__ == "__main__":
     fig1.colorbar(scatter)
     fig2.colorbar(scatter2)
     
-    fig2.savefig(f"IMGPLOT_2_{name.replace('.', '_')}")
-    fig1.savefig(f"IMGPLOT_{name.replace('.', '_')}")
+    fig2.savefig(f"./plots/IMGPLOT_2_{name.replace('.', '_')}")
+    fig1.savefig(f"./plots/IMGPLOT_{name.replace('.', '_')}")
     
 
 
