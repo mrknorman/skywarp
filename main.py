@@ -1,4 +1,4 @@
-import tensorflow as tf
+1import tensorflow as tf
 from tqdm import tqdm
 import tensorflow_datasets as tfds
 
@@ -18,15 +18,36 @@ from common_functions import *
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
 
-strategy = setup_CUDA(True, "0,1,3,4,5")
+strategy = setup_CUDA(True, "0,1,2")
 
 policy = mixed_precision.Policy('mixed_float16')
 mixed_precision.set_global_policy(policy)
 
-
 def get_element_shape(dataset):
     for element in dataset:
         return element['strain'].shape[1:]
+    
+def residual_block(inputs, kernel_size, num_kernels, num_layers):
+    
+    x = inputs
+    for i in range(num_layers):
+        x = layers.Conv1D(num_kernels, kernel_size, padding = 'same')(x) 
+        x = tf.keras.layers.ReLU()(x)
+        x = tf.keras.layers.BatchNormalization()(x)
+        
+    inputs = layers.Conv1D(num_kernels, 1)(inputs) 
+    
+    return x + inputs
+
+def identity_block(inputs, kernel_size, num_kernels, num_layers):
+    
+    x = inputs
+    for i in range(num_layers):
+        x = layers.Conv1D(num_kernels, kernel_size, padding = 'same')(x) 
+        x = tf.keras.layers.ReLU()(x)
+        x = tf.keras.layers.BatchNormalization()(x)
+        
+    return x + inputs
 
 def transformer_encoder(inputs, head_size, num_heads, ff_dim, dropout=0):
     # Normalization and Attention
@@ -47,33 +68,6 @@ def transformer_encoder(inputs, head_size, num_heads, ff_dim, dropout=0):
     x = layers.Dropout(dropout)(x)
     return x + res
 
-
-class Time2Vec(keras.layers.Layer):
-    def __init__(self, kernel_size=1):
-        super(Time2Vec, self).__init__(trainable=True, name='Time2VecLayer')
-        self.k = kernel_size
-    
-    def build(self, input_shape):
-        # trend
-        self.wb = self.add_weight(name='wb',shape=(input_shape[1],),initializer='uniform',trainable=True)
-        self.bb = self.add_weight(name='bb',shape=(input_shape[1],),initializer='uniform',trainable=True)
-        # periodic
-        self.wa = self.add_weight(name='wa',shape=(1, input_shape[1], self.k),initializer='uniform',trainable=True)
-        self.ba = self.add_weight(name='ba',shape=(1, input_shape[1], self.k),initializer='uniform',trainable=True)
-        super(Time2Vec, self).build(input_shape)
-    
-    def call(self, inputs, **kwargs):
-        bias = self.wb * inputs + self.bb
-        dp = K.dot(inputs, self.wa) + self.ba
-        wgts = K.sin(dp) # or K.cos(.)
-
-        ret = K.concatenate([K.expand_dims(bias, -1), wgts], -1)
-        ret = K.reshape(ret, (-1, inputs.shape[1]*(self.k+1)))
-        return ret
-    
-    def compute_output_shape(self, input_shape):
-        return (input_shape[0], input_shape[1]*(self.k + 1))
-
 def positional_enc(seq_len: int, model_dim: int) -> tf.Tensor:
     """
     Computes pre-determined postional encoding as in (Vaswani et al., 2017).
@@ -88,7 +82,6 @@ def positional_enc(seq_len: int, model_dim: int) -> tf.Tensor:
     positional_encoding_table[:, 1::2] = np.cos(pos * frequencies)
 
     return tf.cast(positional_encoding_table, tf.float16)
-
 
 def build_transformer(
     input_shape,
@@ -129,6 +122,51 @@ def build_transformer(
     outputs = layers.Dense(2, activation="softmax", name = 'signal_present')(x)
     return keras.Model(inputs, outputs)
 
+def build_conv_transformer(
+    input_shape,
+    config
+):
+    #Unpack config:
+    head_size = config["head_size"]
+    num_heads = config["num_heads"]
+    ff_dim = config["ff_dim"]
+    num_transformer_blocks = config["num_transformer_blocks"]
+    mlp_units = config["mlp_units"]
+    mlp_dropout = config["mlp_dropout"]
+    dropout = config["dropout"]
+
+    inputs = keras.Input(shape=input_shape, name='strain')
+    
+    model_dim = num_heads * head_size
+
+    # projection to increase the size of the model
+    x = layers.Reshape((input_shape[0], 1))(inputs)
+        
+    x = residual_block(x, 8, int(model_dim/4), 2)
+    x = layers.MaxPool1D(8)(x) 
+    x = residual_block(x, 8, int(model_dim/2), 2)
+    x = layers.MaxPool1D(8)(x) 
+    x = residual_block(x, 8, int(model_dim), 2)
+    
+    # positional encoding
+    seq_len = x.shape[1]
+    positional_encoding = positional_enc(seq_len, model_dim)  # or model_dim=1
+
+    x += positional_encoding[:x.shape[1]]
+    x = layers.Dropout(dropout)(x)
+
+    for _ in range(num_transformer_blocks):
+        x = transformer_encoder(x, head_size, num_heads, ff_dim, dropout)
+
+    x = layers.GlobalAveragePooling1D(data_format="channels_first")(x)
+    
+    for dim in mlp_units:
+        x = layers.Dense(dim, activation="relu")(x)
+        x = layers.Dropout(mlp_dropout)(x)
+    
+    outputs = layers.Dense(2, activation="softmax", name = 'signal_present')(x)
+    return keras.Model(inputs, outputs)
+
 def build_cnn(
     input_shape,
     config
@@ -151,7 +189,7 @@ def build_cnn(
     x = layers.Dropout(0.5)(x) 
     x = layers.Dense(64, activation="elu")(x) 
     x = layers.Dropout(0.5)(x) 
-    outputs = layers.Dense(2, activation="softmax", kernel_regularizer='l2')(x) 
+    outputs = layers.Dense(2, activation="softmax")(x) 
         
     return keras.Model(inputs, outputs)
 
@@ -162,10 +200,10 @@ if __name__ == "__main__":
 #
     data_dir = "./skywarp_dataset"
 
-    validation_signal_paths = ["datasets/cbc_10_e"]
+    validation_signal_paths = ["datasets/cbc_10.0_e"]
     validation_noise_paths  = ["datasets/noise_0_v"]
     
-    model_name = "cnn_10_10"
+    model_name = "skywarp_res_conv"
     model_path = f"models/{model_name}"
 
     model_config_large = dict(
@@ -183,14 +221,14 @@ if __name__ == "__main__":
         num_heads=8,
         ff_dim=8,
         num_transformer_blocks=8,
-        mlp_units=[512],
+        mlp_units=[128],
         mlp_dropout=0.1,
         dropout=0.1
     )
 
     training_config = dict(
         learning_rate=1e-4,
-        patience=10,
+        patience=20,
         epochs=200,
         batch_size=32
     )
@@ -200,11 +238,6 @@ if __name__ == "__main__":
         "skywarp_dataset",
         data_dir = "skywarp_dataset"
     )['train'].batch(batch_size=training_config["batch_size"])
-    
-    for i, data in enumerate(train_dataset.map(getInput, num_parallel_calls=tf.data.AUTOTUNE)):
-        print(data)
-        if i > 10:
-            break
             
     # Split Dataset:
     signal_v_dataset = load_label_datasets(validation_signal_paths, 1)
@@ -222,7 +255,9 @@ if __name__ == "__main__":
 
     with strategy.scope():
 
-        model =  build_transformer(
+        # model = tf.keras.models.load_model(f"models/skywarp_regular_c_10_10.2")
+        
+        model = build_conv_transformer(
             input_shape,
             model_config
         )
@@ -234,6 +269,8 @@ if __name__ == "__main__":
             metrics=["sparse_categorical_accuracy"],
         )
         model.summary()
+        
+        quit()
 
         callbacks = [
             keras.callbacks.EarlyStopping(

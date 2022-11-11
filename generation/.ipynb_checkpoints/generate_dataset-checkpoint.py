@@ -29,7 +29,7 @@ def setup_CUDA(verbose, device_num):
 		
 	return strategy
 
-strategy = setup_CUDA(True, "3")
+strategy = setup_CUDA(True, "-1")
 tf.keras.backend.set_floatx('float16')
 
 def generateDataset(config):
@@ -66,22 +66,20 @@ def generateDataset(config):
     tf.data.experimental.save(tf_dataset, config["dataset_name"])
     
 if __name__ == "__main__":
-    
-    num_datasets = 315;
-    
-    for i in range(10):   
+        
+    for i in np.linspace(0.5,9.5,10):   
         # User Parameters:
         config = dict(
             detector_initials = ["H1"],
             duration          = 1,
             fs                = 8192,
-            num_injections    = 81000,
+            num_injections    = 1000,
             labels            = {'type' : 'noise'},
             detectors         = 'H',
             backgroundType    = 'optimal',
             #Injection related:
-            injectionFolder   = None, #'./new_injections',
-            injectionSNR      = 10,
+            injectionFolder   = './validation_injections',
+            injectionSNR      = i,
             injectionCrop     = 0.25,
             # More options:
             differentSignals  = False,
@@ -89,7 +87,7 @@ if __name__ == "__main__":
             disposition       = None,
             windowSize        = 16,
             plugins           = [],
-            dataset_name      = f"noise_{i}"
+            dataset_name      = f"cbc_{i}_e"
         )
 
         generateDataset(config)

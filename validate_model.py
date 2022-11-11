@@ -12,7 +12,6 @@ from tensorflow.keras import mixed_precision
 policy = mixed_precision.Policy('mixed_float16')
 mixed_precision.set_global_policy(policy)
 
-
 import matplotlib.pyplot as plt
 
 from tqdm import tqdm
@@ -22,7 +21,17 @@ from common_functions import *
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
 
-strategy = setup_CUDA(True, "0,3,4,5")
+strategy = setup_CUDA(True, "2,4,5")
+
+def validate_model_scores(model, dataset):
+    
+    scores = np.empty([1, 2])
+    for element in tqdm(dataset.batch(batch_size = 32)):
+        scores = np.append(scores, model(element).numpy(), axis = 0)
+
+    scores = scores[1:]
+    
+    return scores
 
 def run_efficiency_plots(model, path_suffix, num_tests):
     
@@ -41,14 +50,16 @@ def run_efficiency_plots(model, path_suffix, num_tests):
         
     return acc, loss  
 
-def validate_model_scores(model, dataset):
+def run_efficiency_scores(model, path_suffix, num_tests):
     
-    scores = np.empty([1, 2])
-    for element in tqdm(dataset.batch(batch_size = 32)):
-        scores = np.append(scores, model(element).numpy(), axis = 0)
-
-    scores = scores[1:]
-    
+    scores = []
+    for index in np.linspace(0,10,21):
+        
+        path = [f"{path_suffix}_{index}_e"];
+        dataset = load_datasets(path);
+        
+        scores.append(validate_model_scores(model, dataset))
+        
     return scores
 
 def calculateFAR(model, datasets):
@@ -93,17 +104,15 @@ if __name__ == "__main__":
     # User parameters:
     noise_paths = ["datasets/noise_0_v", "datasets/noise_1_v", "datasets/noise_2_v", "datasets/noise_3_v", "datasets/noise_4_v", "datasets/noise_5_v", "datasets/noise_6_v", "datasets/noise_7_v", "datasets/noise_8_v", "datasets/noise_9_v", "datasets/noise_10_v", "datasets/noise_11_v", "datasets/noise_12_v"]
     
-    model_name = "skywarp_large_c_10_10"
+    model_name = "skywarp_res_conv"
 
     model = tf.keras.models.load_model(f"./models/{model_name}")
     
     print("Signal")
     path_suffix = "./datasets/cbc"
-    acc, loss = run_efficiency_plots(model, path_suffix, 11)
-    np.save(f"./eff_plot_scores/{model_name}", (acc, loss))
-    
-    quit()
-    
+    scores = run_efficiency_scores(model, path_suffix, 11)
+    np.save(f"./eff_plot_scores/{model_name}", scores)
+            
     scores = np.array([])
     for path in noise_paths:
         noise_ds = load_datasets([path])
@@ -115,9 +124,6 @@ if __name__ == "__main__":
         
     scores = np.sort(scores)[::1]
     np.save(f"./far_scores/{model_name}", scores)
-    
-    quit()
-
     noise_ds = add_labels(noise_ds, 0)
 
     print("Noise")
