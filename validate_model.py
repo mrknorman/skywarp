@@ -12,7 +12,6 @@ from tensorflow.keras import mixed_precision
 policy = mixed_precision.Policy('mixed_float16')
 mixed_precision.set_global_policy(policy)
 
-
 import matplotlib.pyplot as plt
 
 from tqdm import tqdm
@@ -54,7 +53,11 @@ def run_efficiency_plots(model, path_suffix, num_tests):
 def run_efficiency_scores(model, path_suffix, num_tests):
     
     scores = []
+<<<<<<< HEAD
     for index in range(10):
+=======
+    for index in np.linspace(0,10,21):
+>>>>>>> 367c358eeef4ac984e599ea3fcbee421122690b5
         
         path = [f"{path_suffix}_{index}_e"];
         dataset = load_datasets(path);
@@ -105,7 +108,11 @@ if __name__ == "__main__":
     # User parameters:
     noise_paths = ["datasets/noise_0_v", "datasets/noise_1_v", "datasets/noise_2_v", "datasets/noise_3_v", "datasets/noise_4_v", "datasets/noise_5_v", "datasets/noise_6_v", "datasets/noise_7_v", "datasets/noise_8_v", "datasets/noise_9_v"]
     
+<<<<<<< HEAD
     model_name = "skywarp_conv_single"
+=======
+    model_name = "skywarp_res_conv"
+>>>>>>> 367c358eeef4ac984e599ea3fcbee421122690b5
 
     model = tf.keras.models.load_model(f"./models/{model_name}")
     
@@ -125,9 +132,6 @@ if __name__ == "__main__":
         
     scores = np.sort(scores)[::1]
     np.save(f"./far_scores/{model_name}", scores)
-    
-    quit()
-
     noise_ds = add_labels(noise_ds, 0)
 
     print("Noise")

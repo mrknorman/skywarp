@@ -1,4 +1,4 @@
-import tensorflow as tf
+1import tensorflow as tf
 from tqdm import tqdm
 import tensorflow_datasets as tfds
 from functools import partial
@@ -19,11 +19,16 @@ from common_functions import *
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
 
+<<<<<<< HEAD
 strategy = setup_CUDA(True, "0,1,3,4,5,6,7")
+=======
+strategy = setup_CUDA(True, "0,1,2")
+>>>>>>> 367c358eeef4ac984e599ea3fcbee421122690b5
 
 policy = mixed_precision.Policy('mixed_float16')
 mixed_precision.set_global_policy(policy)
 
+<<<<<<< HEAD
 def calculateEquivilentKernelSize(kernel_size, dilation_size):
 	
 	return int(kernel_size + (dilation_size - 1)*(kernel_size - 1))
@@ -34,9 +39,33 @@ def calculateConvOuputSize(input_size, kernel_size, stride_size, dilation_size):
 	
 	return int(((input_size - kernel_size) / stride_size ) + 1)
 
+=======
+>>>>>>> 367c358eeef4ac984e599ea3fcbee421122690b5
 def get_element_shape(dataset):
     for element in dataset:
         return element['strain'].shape[1:]
+    
+def residual_block(inputs, kernel_size, num_kernels, num_layers):
+    
+    x = inputs
+    for i in range(num_layers):
+        x = layers.Conv1D(num_kernels, kernel_size, padding = 'same')(x) 
+        x = tf.keras.layers.ReLU()(x)
+        x = tf.keras.layers.BatchNormalization()(x)
+        
+    inputs = layers.Conv1D(num_kernels, 1)(inputs) 
+    
+    return x + inputs
+
+def identity_block(inputs, kernel_size, num_kernels, num_layers):
+    
+    x = inputs
+    for i in range(num_layers):
+        x = layers.Conv1D(num_kernels, kernel_size, padding = 'same')(x) 
+        x = tf.keras.layers.ReLU()(x)
+        x = tf.keras.layers.BatchNormalization()(x)
+        
+    return x + inputs
 
 def transformer_encoder(inputs, head_size, num_heads, ff_dim, dropout=0):
     # Normalization and Attention
@@ -72,6 +101,7 @@ def positional_enc(seq_len: int, model_dim: int) -> tf.Tensor:
 
     return tf.cast(positional_encoding_table, tf.float16)
 
+<<<<<<< HEAD
 def residual_block(inputs, kernel_size, num_kernels, num_layers):
     
     x = inputs
@@ -84,6 +114,8 @@ def residual_block(inputs, kernel_size, num_kernels, num_layers):
     
     return x + inputs
 
+=======
+>>>>>>> 367c358eeef4ac984e599ea3fcbee421122690b5
 def build_transformer(
     input_shape,
     config
@@ -142,6 +174,7 @@ def build_conv_transformer(
 
     # projection to increase the size of the model
     x = layers.Reshape((input_shape[0], 1))(inputs)
+<<<<<<< HEAD
     
     """
     x = Conv1D(filters=64, kernel_size=8, padding='valid', activation='relu')(x)
@@ -153,6 +186,9 @@ def build_conv_transformer(
     x = Conv1D(filters=16, kernel_size=8, padding='valid', activation='relu')(x)
     x = Conv1D(filters=int(model_dim), kernel_size=8, padding='valid', activation='relu')(x)
     """
+=======
+        
+>>>>>>> 367c358eeef4ac984e599ea3fcbee421122690b5
     x = residual_block(x, 8, int(model_dim/4), 2)
     x = layers.MaxPool1D(8)(x) 
     x = residual_block(x, 8, int(model_dim/2), 2)
@@ -200,7 +236,7 @@ def build_cnn(
     x = layers.Dropout(0.5)(x) 
     x = layers.Dense(64, activation="elu")(x) 
     x = layers.Dropout(0.5)(x) 
-    outputs = layers.Dense(2, activation="softmax", kernel_regularizer='l2')(x) 
+    outputs = layers.Dense(2, activation="softmax")(x) 
         
     return keras.Model(inputs, outputs)
 
@@ -222,10 +258,14 @@ if __name__ == "__main__":
 #
     data_dir = "./skywarp_dataset"
 
-    validation_signal_paths = ["datasets/cbc_10_e"]
+    validation_signal_paths = ["datasets/cbc_10.0_e"]
     validation_noise_paths  = ["datasets/noise_0_v"]
     
+<<<<<<< HEAD
     model_name = "skywarp_attention_regular"
+=======
+    model_name = "skywarp_res_conv"
+>>>>>>> 367c358eeef4ac984e599ea3fcbee421122690b5
     model_path = f"models/{model_name}"
 
     model_config_large = dict(
@@ -243,7 +283,7 @@ if __name__ == "__main__":
         num_heads=8,
         ff_dim=8,
         num_transformer_blocks=8,
-        mlp_units=[512],
+        mlp_units=[128],
         mlp_dropout=0.1,
         dropout=0.1
     )
@@ -262,7 +302,7 @@ if __name__ == "__main__":
 
     training_config = dict(
         learning_rate=1e-4,
-        patience=10,
+        patience=20,
         epochs=200,
         batch_size=32
     )
@@ -272,7 +312,11 @@ if __name__ == "__main__":
         "skywarp_dataset",
         data_dir = "skywarp_dataset"
     )['train'].batch(batch_size=training_config["batch_size"])
+<<<<<<< HEAD
         
+=======
+            
+>>>>>>> 367c358eeef4ac984e599ea3fcbee421122690b5
     # Split Dataset:
     signal_v_dataset = load_label_datasets(validation_signal_paths, 1)
     noise_v_dataset = load_label_datasets(validation_noise_paths, 0)
@@ -288,9 +332,16 @@ if __name__ == "__main__":
     input_shape = get_element_shape(train_dataset)
 
     with strategy.scope():
+<<<<<<< HEAD
         
         
         model =  build_transformer(
+=======
+
+        # model = tf.keras.models.load_model(f"models/skywarp_regular_c_10_10.2")
+        
+        model = build_conv_transformer(
+>>>>>>> 367c358eeef4ac984e599ea3fcbee421122690b5
             input_shape,
             model_config
         )
@@ -304,6 +355,8 @@ if __name__ == "__main__":
             metrics=["sparse_categorical_accuracy"],
         )
         model.summary()
+        
+        quit()
 
         callbacks = [
             keras.callbacks.EarlyStopping(
@@ -336,7 +389,11 @@ if __name__ == "__main__":
         plt.ylabel('accuracy')
         plt.xlabel('epoch')
         plt.legend(['train', 'validation'], loc='upper left')
+<<<<<<< HEAD
         plt.savefig(f"accuracy_history_{model_name}.png")
+=======
+        plt.savefig(f"./plots/accuracy_history_{model_name}")
+>>>>>>> 367c358eeef4ac984e599ea3fcbee421122690b5
 
         plt.figure()
         plt.plot(history.history['loss'])
@@ -345,6 +402,10 @@ if __name__ == "__main__":
         plt.ylabel('loss')
         plt.xlabel('epoch')
         plt.legend(['train', 'validation'], loc='upper left')
+<<<<<<< HEAD
         plt.savefig(f"loss_history_{model_name}.png")
+=======
+        plt.savefig(f"./plots/loss_history_{model_name}")
+>>>>>>> 367c358eeef4ac984e599ea3fcbee421122690b5
 
         model.evaluate(test_dataset, verbose=1)
