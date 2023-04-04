@@ -72,16 +72,16 @@ if __name__ == "__main__":
     for i in range(10):   
         # User Parameters:
         config = dict(
-            detector_initials = ["H1"],
+            detector_initials = ["H1, L1"],
             duration          = 1,
             fs                = 8192,
             num_injections    = 81000,
-            labels            = {'type' : 'noise'},
+            labels            = {'type' : 'signal'},
             detectors         = 'H',
             backgroundType    = 'optimal',
             #Injection related:
-            injectionFolder   = None, #'./new_injections',
-            injectionSNR      = 10,
+            injectionFolder   = './validation_injections',
+            injectionSNR      = 5,
             injectionCrop     = 0.25,
             # More options:
             differentSignals  = False,
@@ -89,7 +89,7 @@ if __name__ == "__main__":
             disposition       = None,
             windowSize        = 16,
             plugins           = [],
-            dataset_name      = f"noise_{i}"
+            dataset_name      = f"signal_{i}_v"
         )
 
         generateDataset(config)

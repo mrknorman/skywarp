@@ -42,7 +42,7 @@ def add_labels(dataset, label):
     dataset_size = dataset.cardinality().numpy()
 
     labels = Dataset.from_tensor_slices(
-        np.full(dataset_size, label, dtype=np.float16))
+        np.full(dataset_size, label, dtype=np.float64))
     
     return Dataset.zip((dataset, labels))
     

@@ -12,6 +12,6 @@ cbc(duration=0.99,
                95],
     massStep= 1,
     rep=10,
-    destinationDirectory="./new_injections",
+    destinationDirectory="./validation_injections",
     aproximant="IMRPhenomD",
     test=False)

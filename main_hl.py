@@ -99,65 +99,20 @@ def build_transformer(
     dropout = config["dropout"]
 
     inputs = keras.Input(shape=input_shape, name='strain')
-
-    # rescale "chunking"
-    x = layers.Reshape((512, 16))(inputs)
-
-    # positional encoding
-    seq_len = 512  # 1024
-    model_dim = num_heads * head_size
-    positional_encoding = positional_enc(seq_len, model_dim)  # or model_dim=1
-
-    # projection to increase the size of the model
-    x = layers.Conv1D(model_dim, 1)(x) 
-    x += positional_encoding[:x.shape[1]]
-    x = layers.Dropout(dropout)(x)
-
-    for _ in range(num_transformer_blocks):
-        x = transformer_encoder(x, head_size, num_heads, ff_dim, dropout)
-
-    x = layers.GlobalAveragePooling1D(data_format="channels_first")(x)
-    for dim in mlp_units:
-        x = layers.Dense(dim, activation="relu")(x)
-        x = layers.Dropout(mlp_dropout)(x)
-    outputs = layers.Dense(2, activation="softmax", name = 'signal_present')(x)
-    return keras.Model(inputs, outputs)
-
-def build_conv_transformer(
-    input_shape,
-    config
-):
-    #Unpack config:
-    head_size = config["head_size"]
-    num_heads = config["num_heads"]
-    ff_dim = config["ff_dim"]
-    num_transformer_blocks = config["num_transformer_blocks"]
-    mlp_units = config["mlp_units"]
-    mlp_dropout = config["mlp_dropout"]
-    dropout = config["dropout"]
-
-    inputs = keras.Input(shape=input_shape, name='strain')
     
     model_dim = num_heads * head_size
 
     # projection to increase the size of the model
     x = layers.Reshape((input_shape[0], 1))(inputs)
     
-    """
-    x = Conv1D(filters=64, kernel_size=8, padding='valid', activation='relu')(x)
-    x = MaxPooling1D(pool_size=8, strides=8)(x)
-    x = Conv1D(filters=32, kernel_size=8, padding='valid', activation='relu')(x)
-    x = Conv1D(filters=32, kernel_size=8, padding='valid', activation='relu')(x)
-    x = MaxPooling1D(pool_size=8, strides=8)(x)
-    x = Conv1D(filters=16, kernel_size=8, padding='valid', activation='relu')(x)
-    x = Conv1D(filters=16, kernel_size=8, padding='valid', activation='relu')(x)
-    x = Conv1D(filters=int(model_dim), kernel_size=8, padding='valid', activation='relu')(x)
-    """
+    x = residual_block(x, 4, int(model_dim/8), 2)
+    x = layers.MaxPool1D(2)(x) 
     x = residual_block(x, 8, int(model_dim/4), 2)
-    x = layers.MaxPool1D(8)(x) 
-    x = residual_block(x, 8, int(model_dim/2), 2)
-    x = layers.MaxPool1D(8)(x) 
-    x = residual_block(x, 8, int(model_dim), 2)
+    x = layers.MaxPool1D(2)(x) 
+    x = residual_block(x, 16, int(model_dim/2), 2)
+    x = layers.MaxPool1D(2)(x) 
+    x = residual_block(x, 32, int(model_dim), 2)
+    x = layers.MaxPool1D(2)(x) 
     
     # positional encoding
     seq_len = x.shape[1]
@@ -225,7 +180,7 @@ if __name__ == "__main__":
     validation_signal_paths = ["datasets/cbc_10_e"]
     validation_noise_paths  = ["datasets/noise_0_v"]
     
-    model_name = "skywarp_attention_regular"
+    model_name = "skywarp_conv_c_10_10_2"
     model_path = f"models/{model_name}"
 
     model_config_large = dict(
@@ -238,7 +193,7 @@ if __name__ == "__main__":
         dropout=0.1
     )
     
-    model_config_regular = dict(
+    model_config = dict(
         head_size=16,
         num_heads=8,
         ff_dim=8,
@@ -247,22 +202,10 @@ if __name__ == "__main__":
         mlp_dropout=0.1,
         dropout=0.1
     )
-    
-    model_config_single = dict(
-        head_size=16,
-        num_heads=256,
-        ff_dim=8,
-        num_transformer_blocks=1,
-        mlp_units=[128],
-        mlp_dropout=0.1,
-        dropout=0.1
-    )
-    
-    model_config = model_config_regular
 
     training_config = dict(
         learning_rate=1e-4,
-        patience=10,
+        patience=20,
         epochs=200,
         batch_size=32
     )
@@ -288,7 +231,6 @@ if __name__ == "__main__":
     input_shape = get_element_shape(train_dataset)
 
     with strategy.scope():
-        
         
         model =  build_transformer(
             input_shape,
