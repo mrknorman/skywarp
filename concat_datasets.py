@@ -24,7 +24,7 @@ def get_element_shape(dataset):
 if __name__ == "__main__":
 
     # User parameters:
-    noise_paths  = ["noise_0",  "noise_1", "noise_2", "noise_3",  "noise_4", "noise_5",  "noise_6", "noise_7", "noise_8",  "noise_9"]
+    noise_paths  = ["noise_0", "noise_1", "noise_2", "noise_3",  "noise_4", "noise_5",  "noise_6", "noise_7", "noise_8",  "noise_9"]
     signal_paths = ["cbc_10_0", "cbc_10_1", "cbc_10_2","cbc_10_3", "cbc_10_4", "cbc_10_5", "cbc_10_6", "cbc_10_7", "cbc_10_8", "cbc_10_9"]
     
     split_datasets = {}
