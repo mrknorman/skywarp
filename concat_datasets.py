@@ -20,7 +20,6 @@ def get_element_shape(dataset):
     for element in dataset:
         return element['strain'].shape[1:]
 
-
 if __name__ == "__main__":
 
     # User parameters:
@@ -32,14 +31,14 @@ if __name__ == "__main__":
     data = []
     labels = []
     for path in tqdm(noise_paths):
-        dataset = tf.data.experimental.load(f"./datasets/{path}")
+        dataset = tf.data.experimental.load(f"../skywarp_data/datasets/{path}")
 
         for i in dataset.as_numpy_iterator():
             data.append(i)
             labels.append(0)
     
     for path in tqdm(signal_paths):
-        dataset = tf.data.experimental.load(f"./datasets/{path}")
+        dataset = tf.data.experimental.load(f"../skywarp_data/datasets/{path}")
 
         for i in dataset.as_numpy_iterator():
             data.append(i)
@@ -53,11 +52,11 @@ if __name__ == "__main__":
     
     # Optionally define a custom `data_dir`.
     # If None, then the default data dir is used.
-    custom_data_dir = "./skywarp_dataset"
+    custom_data_dir = "../skywarp_data/skywarp_dataset_gaussian"
 
     # Define the builder.
     builder = tfds.dataset_builders.TfDataBuilder(
-        name="skywarp_dataset",
+        name="skywarp_dataset_gaussian",
         config="strain_and_label",
         version="0.0.1",
         data_dir=custom_data_dir,
