@@ -6,6 +6,8 @@ import os
 
 tf.keras.backend.set_floatx('float16')
 
+LABEL_TYPE = np.float32
+
 def setup_CUDA(verbose, device_num):
 		
 	os.environ["CUDA_VISIBLE_DEVICES"] = str(device_num)
@@ -42,7 +44,7 @@ def add_labels(dataset, label):
     dataset_size = dataset.cardinality().numpy()
 
     labels = Dataset.from_tensor_slices(
-        np.full(dataset_size, label, dtype=np.float64))
+        np.full(dataset_size, label, dtype=np.float32))
     
     return Dataset.zip((dataset, labels))
     

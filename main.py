@@ -19,7 +19,7 @@ from common_functions import *
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
 
-strategy = setup_CUDA(True, "0,1,3,4,5,6,7")
+strategy = setup_CUDA(True, "3,4,5,6,7")
 
 policy = mixed_precision.Policy('mixed_float16')
 mixed_precision.set_global_policy(policy)
@@ -106,22 +106,20 @@ def residual_block(inputs, kernel_size, num_kernels, num_layers):
     
     return x + inputs
 
-def build_cnn_head(input_shape, input_tensor):
-    x = layers.InputLayer(input_shape=input_shape)(input_tensor)
+def build_cnn_head(input_shape, x):
     x = layers.Reshape((input_shape[-1], 1))(x)
-    x = layers.Conv1D(64, 8, activation="relu")(x)
+    x = layers.Conv1D(64, 8, activation="relu", padding = "same")(x)
     x = layers.MaxPool1D(8)(x)
-    x = layers.Conv1D(32, 8, activation="relu")(x)
-    x = layers.Conv1D(32, 16, activation="relu")(x)
+    x = layers.Conv1D(32, 8, activation="relu", padding = "same")(x)
+    x = layers.Conv1D(32, 16, activation="relu", padding = "same")(x)
     x = layers.MaxPool1D(6)(x)
-    x = layers.Conv1D(16, 16, activation="relu")(x)
-    x = layers.Conv1D(16, 32, activation="relu")(x)
-    x = layers.Conv1D(16, 32, activation="relu")(x)
+    x = layers.Conv1D(16, 16, activation="relu", padding = "same")(x)
+    x = layers.Conv1D(16, 32, activation="relu", padding = "same")(x)
+    x = layers.Conv1D(16, 32, activation="relu", padding = "same")(x)
     
     return x
 
-def build_resnet_head(input_shape, tensor_input):
-    x = layers.InputLayer(input_shape=input_shape)(tensor_input)
+def build_resnet_head(input_shape, x):
     x = layers.Reshape((input_shape[-1], 1))(x)
     x = residual_block(x, 8, int(model_dim/4), 2)
     x = layers.MaxPool1D(8)(x) 
@@ -131,19 +129,20 @@ def build_resnet_head(input_shape, tensor_input):
     
     return x
 
-def build_dense_tail(model_config, tensor_input):
+def build_dense_tail(model_config, x):
     
     # Unpack dict:
     mlp_units = model_config["mlp_units"]
     mlp_dropout = model_config["mlp_dropout"]
     
-    x = layers.Flatten()(tensor_input)
+    x = layers.Flatten()(x)
+    x = tf.cast(x, dtype=tf.float32)
     
     for dim in mlp_units:
-        x = layers.Dense(dim, activation="relu", dtype=np.float32)(x)
+        x = layers.Dense(dim, activation="relu", dtype=tf.float32)(x)
         x = layers.Dropout(mlp_dropout)(x)
         
-    x = layers.Dense(2, activation="relu", dtype=np.float64)(x)
+    x = layers.Dense(2, activation="softmax", dtype=tf.float32)(x)
     
     return x
 
@@ -162,7 +161,7 @@ def build_conv_transformer(
     dropout = config["dropout"]
     res_head = config["res_head"]
     conv_head = config["conv_head"]
-
+    
     inputs = keras.Input(shape=input_shape, name='strain')
     
     model_dim = num_heads * head_size
@@ -195,7 +194,7 @@ def build_conv_transformer(
     return keras.Model(inputs, outputs)
     
 def getInput(element):
-    return (element['strain'], tf.cast(element['signal_present'], tf.float16))
+    return (element['strain'], tf.cast(element['signal_present'], tf.float32))
 
 def lr_scheduler(epoch, lr, warmup_epochs=15, decay_epochs=100, initial_lr=1e-6, base_lr=1e-3, min_lr=5e-5):
     if epoch <= warmup_epochs:
@@ -211,7 +210,7 @@ def lr_scheduler(epoch, lr, warmup_epochs=15, decay_epochs=100, initial_lr=1e-6,
 if __name__ == "__main__":
     
     data_directory_path = "../skywarp_data"
-    data_dir = f"{data_directory_path}/skywarp_dataset"
+    data_dir = f"{data_directory_path}/skywarp_dataset_gaussian"
 
     validation_signal_paths = [f"{data_directory_path}/datasets/cbc_10_e"]
     validation_noise_paths  = [f"{data_directory_path}/datasets/noise_0_v"]
@@ -237,7 +236,7 @@ if __name__ == "__main__":
         num_heads=8,
         ff_dim=8,
         num_transformer_blocks=0,
-        mlp_units=[128],
+        mlp_units=[64],
         mlp_dropout=0.1,
         dropout=0.5
     )
@@ -250,7 +249,7 @@ if __name__ == "__main__":
         num_heads=8,
         ff_dim=8,
         num_transformer_blocks=8,
-        mlp_units=[128],
+        mlp_units=[64],
         mlp_dropout=0.5,
         dropout=0.5
     )
@@ -263,7 +262,7 @@ if __name__ == "__main__":
         num_heads=8,
         ff_dim=8,
         num_transformer_blocks=8,
-        mlp_units=[128],
+        mlp_units=[64],
         mlp_dropout=0.5,
         dropout=0.5
     )
@@ -276,7 +275,7 @@ if __name__ == "__main__":
         num_heads=8,
         ff_dim=8,
         num_transformer_blocks=1,
-        mlp_units=[128],
+        mlp_units=[64],
         mlp_dropout=0.5,
         dropout=0.5
     )
@@ -292,8 +291,8 @@ if __name__ == "__main__":
 
     # Load Dataset:
     train_dataset = tfds.load(
-        "skywarp_dataset",
-        data_dir = f"{data_directory_path}/skywarp_dataset"
+        "skywarp_dataset_gaussian",
+        data_dir = f"{data_directory_path}/skywarp_dataset_gaussian"
     )['train'].batch(batch_size=training_config["batch_size"])
         
     # Split Dataset:
