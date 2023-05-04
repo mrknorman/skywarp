@@ -69,3 +69,29 @@ def split_test_train(dataset, fraction):
     train_dataset = dataset.skip(test_size)
 
     return test_dataset, train_dataset
+
+def posterFormatGraph():
+    
+    fig = plt.figure()
+
+    ax = fig.add_subplot(111)
+
+    ax.set_xlabel('SNR ')
+    ax.set_ylabel('Accuracy ')
+    
+    for axis in ['top','bottom','left','right']:
+        ax.spines[axis].set_linewidth(5)
+
+    ax.xaxis.label.set_color('white')        #setting up X-axis label color to yellow
+    ax.yaxis.label.set_color('white')          #setting up Y-axis label color to blue
+
+    ax.tick_params(axis='x', colors='white')    #setting up X-axis tick color to red
+    ax.tick_params(axis='y', colors='white')  #setting up Y-axis tick color to black
+
+    ax.spines['left'].set_color('white')        # setting up Y-axis tick color to red
+    ax.spines['bottom'].set_color('white')         #setting up above X-axis tick color to red
+    
+    ax.spines.right.set_visible(False)
+    ax.spines.top.set_visible(False)
+    
+    return fig     

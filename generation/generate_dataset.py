@@ -67,19 +67,20 @@ def generateDataset(config):
     
 if __name__ == "__main__":
         
-    for i in np.linspace(0.5,9.5,10):   
+    for i in np.linspace(2.0, 10.0, 17):   
         # User Parameters:
         config = dict(
             detector_initials = ["H1, L1"],
             duration          = 1,
             fs                = 8192,
-            num_injections    = 81000,
+            num_injections    = 100000,
             labels            = {'type' : 'signal'},
             detectors         = 'H',
-            backgroundType    = 'optimal',
+            backgroundType    = 'real',
+            noiseSourceFile   = [[]],
             #Injection related:
-            injectionFolder   = './validation_injections',
-            injectionSNR      = 5,
+            injectionFolder   = '../skywarp_data/validation_injections',
+            injectionSNR      = 10,
             injectionCrop     = 0.25,
             # More options:
             differentSignals  = False,
@@ -87,7 +88,7 @@ if __name__ == "__main__":
             disposition       = None,
             windowSize        = 16,
             plugins           = [],
-            dataset_name      = f"cbc_{i}_e"
+            dataset_name      = f"./skywarp_output/cbc_{i}_real"
         )
 
         generateDataset(config)

@@ -12,6 +12,6 @@ cbc(duration=0.99,
                95],
     massStep= 1,
     rep=10,
-    destinationDirectory="./validation_injections",
+    destinationDirectory="../skywarp_data/validation_injections",
     aproximant="IMRPhenomD",
     test=False)

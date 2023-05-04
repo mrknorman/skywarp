@@ -193,10 +193,11 @@ if __name__ == "__main__":
     with strategy.scope():
         cbc_ds, noise_ds = load_datasets()
 
-    balanced_dataset = prepare_balanced_dataset(cbc_ds, noise_ds)
-    roc_data = process_models(models, balanced_dataset)
+        balanced_dataset = prepare_balanced_dataset(cbc_ds, noise_ds)
+        roc_data = process_models(models, balanced_dataset)
 
     # Plot and save the ROC curves
     output_path = "./roc_curves/comparison_roc_curve.html"
     create_directory(os.path.dirname(output_path))
+    
     plot_and_save_roc_curves(models, roc_data, output_path)
