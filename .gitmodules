@@ -1,3 +1,6 @@
 [submodule "mly"]
 	path = mly
 	url = https://git.ligo.org/mly/mly.git
+[submodule "py_ml_tools"]
+	path = py_ml_tools
+	url = https://github.com/mrknorman/py_ml_tools.git

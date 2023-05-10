@@ -7,6 +7,8 @@ from tensorflow import keras
 from tensorflow.data import Dataset
 from tensorflow.keras import layers
 
+from py_ml_tools.noise import get_ifo_data, O3
+
 from tensorflow.keras import mixed_precision
 import matplotlib.pyplot as plt
 
@@ -23,8 +25,8 @@ from common_functions import *
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
 
-def save_data_to_hdf5(model_name, roc_data, efficiency_scores, far_scores):
-    with h5py.File(f'../skywarp_data/{model_name}_data.h5', 'w') as h5f:
+def save_data_to_hdf5(model_name, noise_type, roc_data, efficiency_scores, far_scores):
+    with h5py.File(f'../skywarp_data/{model_name}_{noise_type}_data.h5', 'w') as h5f:
         # Save ROC data
         roc_group = h5f.create_group('roc_data')
         roc_group.create_dataset('fpr', data=roc_data['fpr'])
@@ -95,8 +97,8 @@ def concat_labels(x, y):
 
 def calculate_roc_data(model, dataset):
     # Use .map() to extract the true labels and model inputs
-    y_true_dataset = dataset.map(lambda x, y: y)
     x_dataset = dataset.map(lambda x, y: x)
+    y_true_dataset = dataset.map(lambda x, y: y)
 
     # Convert the true labels dataset to a tensor using reduce
     y_true = y_true_dataset.reduce(tf.constant([], dtype=tf.float32), concat_labels)
@@ -146,7 +148,7 @@ def calculate_far_scores(model, noise_ds, num_examples=1E5):
     num_steps = int(num_examples // batch_size)
     
     # Take the required number of samples and map to get only the data
-    dataset = noise_ds.take(num_steps).map(lambda data, label: data)
+    dataset = noise_ds.take(num_steps)
     
     # Predict the scores and get the second column ([:, 1])
     far_scores = model.predict(dataset, steps = num_steps, verbose=1)[:, 1]
@@ -179,13 +181,16 @@ def gaussian_noise_generator(num_samples=8192):
         noise = tf.random.normal([num_samples], dtype=tf.float16)
         constant = tf.constant(0.0, dtype=tf.float32)
         yield noise, constant
-
+        
+def add_noise_label(element):
+    return element, tf.constant(0.0, shape = element.shape, dtype=tf.float32)
+                            
 if __name__ == "__main__":
     # User parameters:
     skywarp_data_directory = "../skywarp_data/"
     
     batch_size    = 32
-    num_far_tests = 1E7
+    num_far_tests = 1000 #int(1E7)
     
     model_names = [
         "skywarp_attention_regular", 
@@ -195,7 +200,7 @@ if __name__ == "__main__":
     ]
         
     # Load datasets:
-    strategy = setup_CUDA(True, "1,2,3,4,5,6,7")
+    strategy = setup_CUDA(True, "5,6")
     policy = mixed_precision.Policy('mixed_float16')
     mixed_precision.set_global_policy(policy)
     options = tf.data.Options()
@@ -206,14 +211,38 @@ if __name__ == "__main__":
     with strategy.scope():
         cbc_ds = load_cbc_datasets(skywarp_data_directory, 1)
         num_samples = get_element_shape(cbc_ds)[0]
-                
-        # Create TensorFlow dataset from the generator
-        noise_ds = tf.data.Dataset.from_generator(
+        
+         # Create TensorFlow dataset from the generator
+        g_noise_ds = tf.data.Dataset.from_generator(
             generator=lambda: gaussian_noise_generator(num_samples=num_samples),
             output_signature=(
                 tf.TensorSpec(shape=(num_samples,), dtype=tf.float16),
                 tf.TensorSpec(shape=(), dtype=tf.float32),
             )
+        ).batch(batch_size)
+        
+        # Create TensorFlow dataset from the generator
+        noise_ds = tf.data.Dataset.from_generator(
+            generator=lambda: get_ifo_data(
+                time_interval = O3,
+                data_labels = ["noise", "glitches"],
+                ifo = "L1",
+                sample_rate_hertz = num_samples,
+                example_duration_seconds = 1.0,
+                max_num_examples = num_far_tests,
+                num_examples_per_batch = batch_size,
+                order = "shortest_first"
+            ),
+            output_signature=(
+                tf.TensorSpec(shape=(batch_size, num_samples, 1), dtype=tf.float16),
+                tf.TensorSpec(shape=(batch_size,), dtype=tf.float32)
+            )
+        ).map(lambda data, gps_times: \
+            (tf.reshape(
+                tf.cast(data, dtype = tf.float16), 
+                (batch_size, num_samples)
+            ), 
+            tf.constant(0.0, shape = (batch_size,), dtype=tf.float32))
         )
         
         cbc_ds = cbc_ds \
@@ -222,7 +251,6 @@ if __name__ == "__main__":
             .with_options(options)
         
         noise_ds = noise_ds \
-            .batch(batch_size) \
             .prefetch(tf.data.experimental.AUTOTUNE) \
             .with_options(options)
         
@@ -230,7 +258,7 @@ if __name__ == "__main__":
             .take(tf.data.experimental.cardinality(cbc_ds).numpy())) \
             .prefetch(tf.data.experimental.AUTOTUNE) \
             .with_options(options)
-
+        
         roc_data = {}
         for model_name in model_names:
             
@@ -253,7 +281,48 @@ if __name__ == "__main__":
             logging.info("Done.")
             
             logging.info(f"Saving {model_name} validation data...")
-            save_data_to_hdf5(model_name, roc_data, efficiency_scores, far_scores)
+            save_data_to_hdf5(model_name, "white_noise", roc_data, efficiency_scores, far_scores)
+            logging.info("Done.")
+
+            # Force garbage collection
+            gc.collect()
+                
+        # Create TensorFlow dataset from the generator
+        noise_ds = tf.data.Dataset.from_generator(
+            generator=lambda: gaussian_noise_generator(num_samples=num_samples),
+            output_signature=(
+                tf.TensorSpec(shape=(num_samples,), dtype=tf.float16),
+                tf.TensorSpec(shape=(), dtype=tf.float32),
+            )
+        ).batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE).with_options(options)
+        
+        balanced_dataset = cbc_ds.concatenate(noise_ds \
+            .take(tf.data.experimental.cardinality(cbc_ds).numpy())) \
+            .prefetch(tf.data.experimental.AUTOTUNE) \
+            .with_options(options)
+        
+        for model_name in model_names:
+            
+            logging.info(f"Loading model {model_name}...")
+            model = tf.keras.models.load_model(f"{skywarp_data_directory}/models/{model_name}")
+            logging.info("Done.")
+                        
+            logging.info(f"Calculate {model_name} ROC data...")
+            fpr, tpr, roc_auc = calculate_roc_data(model, balanced_dataset)
+            roc_data = {'fpr': fpr, 'tpr': tpr, 'roc_auc': roc_auc}
+            logging.info("Done.")
+
+            logging.info(f"Calculating {model_name} efficiency scores...")
+            path_suffix = f"{skywarp_data_directory}/datasets/cbc"
+            efficiency_scores = calculate_efficiency_scores(model, path_suffix, batch_size, options)
+            logging.info("Done.")
+                        
+            logging.info(f"Calculating {model_name} FAR scores...")
+            far_scores = calculate_far_scores(model, noise_ds, num_examples=num_far_tests)
+            logging.info("Done.")
+            
+            logging.info(f"Saving {model_name} validation data...")
+            save_data_to_hdf5(model_name, "real_noise", roc_data, efficiency_scores, far_scores)
             logging.info("Done.")
 
             # Force garbage collection

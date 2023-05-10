@@ -3,6 +3,7 @@ sys.path.append("./mly/")
 from mly.datatools import DataSet
 import numpy as np
 import tensorflow as tf
+from py_ml_tools.noise import 
 import os
 
 def setup_CUDA(verbose, device_num):
@@ -66,6 +67,15 @@ def generateDataset(config):
     tf.data.experimental.save(tf_dataset, config["dataset_name"])
     
 if __name__ == "__main__":
+    
+    segments = get_segment_times(
+        start: float,
+        stop: float,
+        ifo: str,
+        state_flag: str,
+        minimum_duration: float,
+        verbosity: int
+    )
         
     for i in np.linspace(2.0, 10.0, 17):   
         # User Parameters:

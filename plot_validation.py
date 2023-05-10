@@ -251,7 +251,6 @@ def plot_roc_curves(model_names, data, output_path, epsilon=1e-6):
 
     colors = cycle(['red', 'green', 'blue', 'purple', 'orange', 'brown', 'pink', 'cyan', 'magenta', 'yellow'])
     
-    
     for color, model_name in zip(colors, model_names):
         
         roc_data = data[model_name]["roc_data"]
@@ -278,6 +277,7 @@ def plot_roc_curves(model_names, data, output_path, epsilon=1e-6):
 if __name__ == "__main__":
     restriction = 0
     data_directory = "../skywarp_data/"
+   # Define model names and titles
     model_names = [
         "skywarp_attention_regular", 
         "skywarp_conv_attention_regular", 
@@ -286,11 +286,21 @@ if __name__ == "__main__":
     ]
     model_titles = [
         "Pure Attention Architecture", 
-        "Convolotional Attention Architecture", 
-        "Convolotional Single Attention Architecture", 
-        "Convoloutional Architecture"
+        "Convolutional Attention Architecture", 
+        "Convolutional Single Attention Architecture", 
+        "Convolutional Architecture"
     ]
 
+    # Define data types
+    data_types = [
+        ("white_noise", "White Noise"),
+        ("real_noise", "Real Noise")
+    ]
+    
+    # Generate model names and titles for each data type
+    model_names = [f"{name}_{data_type[0]}" for name in model_names for data_type in data_types]
+    model_titles = [f"{title} {data_type[1]}" for title in model_titles for data_type in data_types]
+        
     fars = np.logspace(-1, -7, 500)
     
     data = {}
