@@ -7,7 +7,7 @@ from tensorflow import keras
 from tensorflow.data import Dataset
 from tensorflow.keras import layers
 
-from py_ml_tools.noise import get_ifo_data, O3
+from py_ml_tools.dataset import get_ifo_data, O3
 
 from tensorflow.keras import mixed_precision
 import matplotlib.pyplot as plt
@@ -190,7 +190,7 @@ if __name__ == "__main__":
     skywarp_data_directory = "../skywarp_data/"
     
     batch_size    = 32
-    num_far_tests = 1000 #int(1E7)
+    num_far_tests = int(1E7)
     
     model_names = [
         "skywarp_attention_regular", 
@@ -200,7 +200,7 @@ if __name__ == "__main__":
     ]
         
     # Load datasets:
-    strategy = setup_CUDA(True, "5,6")
+    strategy = setup_CUDA(True, "4,5,6,7")
     policy = mixed_precision.Policy('mixed_float16')
     mixed_precision.set_global_policy(policy)
     options = tf.data.Options()
@@ -231,7 +231,7 @@ if __name__ == "__main__":
                 example_duration_seconds = 1.0,
                 max_num_examples = num_far_tests,
                 num_examples_per_batch = batch_size,
-                order = "shortest_first"
+                order = "random"
             ),
             output_signature=(
                 tf.TensorSpec(shape=(batch_size, num_samples, 1), dtype=tf.float16),
@@ -239,7 +239,7 @@ if __name__ == "__main__":
             )
         ).map(lambda data, gps_times: \
             (tf.reshape(
-                tf.cast(data, dtype = tf.float16), 
+                data, 
                 (batch_size, num_samples)
             ), 
             tf.constant(0.0, shape = (batch_size,), dtype=tf.float32))
