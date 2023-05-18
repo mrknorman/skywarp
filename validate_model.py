@@ -8,6 +8,7 @@ from tensorflow.data import Dataset
 from tensorflow.keras import layers
 
 from py_ml_tools.dataset import get_ifo_data, O3, get_ifo_data_generator
+from py_ml_tools.setup import setup_cuda
 
 from tensorflow.keras import mixed_precision
 import matplotlib.pyplot as plt
@@ -199,7 +200,7 @@ if __name__ == "__main__":
     ]
         
     # Load datasets:
-    strategy = setup_CUDA(True, "4,5,6,7")
+    strategy = setup_cuda(True, "4,5,6,7")
     policy = mixed_precision.Policy('mixed_float16')
     mixed_precision.set_global_policy(policy)
     options = tf.data.Options()
