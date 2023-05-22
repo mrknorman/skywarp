@@ -5,23 +5,24 @@ import logging
 
 from tensorflow import keras
 from tensorflow.data import Dataset
-from tensorflow.keras import layers
+from tensorflow.keras import mixed_precision, layers
+from tensorflow.keras import backend as K
+from tensorflow.data.experimental import AutoShardPolicy
 
 from py_ml_tools.dataset import get_ifo_data, O3, get_ifo_data_generator
 from py_ml_tools.setup import setup_cuda
 
-from tensorflow.keras import mixed_precision
 import matplotlib.pyplot as plt
 
 import h5py
 
-from tensorflow.keras import backend as K
 
-from tensorflow.data.experimental import AutoShardPolicy
 import gc
 
 from tqdm import tqdm
 from common_functions import *
+
+import cupy
 
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
@@ -187,28 +188,30 @@ if __name__ == "__main__":
     # User parameters:
     skywarp_data_directory = "../skywarp_data/"
     
-    batch_size    = 32
-    num_far_tests = int(1E4)
+    batch_size    = 512
+    num_far_tests = int(1E7)
     sample_rate_hertz = 8192.0
     example_duration_seconds = 1.0
     
     model_names = [
-        "skywarp_attention_regular", 
         "skywarp_conv_attention_regular", 
+        "skywarp_attention_regular", 
         "skywarp_conv_attention_single", 
         "skywarp_conv_regular"
     ]
         
     # Load datasets:
-    strategy = setup_cuda(True, "4,5,6,7")
+    strategy = setup_cuda("4, 5", verbose = True)
+        
     policy = mixed_precision.Policy('mixed_float16')
     mixed_precision.set_global_policy(policy)
     options = tf.data.Options()
     options.experimental_distribute.auto_shard_policy = AutoShardPolicy.DATA
     
-    logging.basicConfig(level=logging.INFO)
-        
     with strategy.scope():
+        
+        logging.basicConfig(level=logging.INFO)
+
         cbc_ds = load_cbc_datasets(skywarp_data_directory, 1)
         num_samples = get_element_shape(cbc_ds)[0]
         
@@ -220,22 +223,7 @@ if __name__ == "__main__":
                 tf.TensorSpec(shape=(), dtype=tf.float32),
             )
         ).batch(batch_size)
-        
-        # Create TensorFlow dataset from the generator
-        real_noise_ds = get_ifo_data_generator(
-            time_interval = O3,
-            data_labels = ["noise", "glitches"],
-            ifo = "L1",
-            sample_rate_hertz = sample_rate_hertz,
-            example_duration_seconds = example_duration_seconds,
-            max_segment_size = 3600,
-            max_num_examples = num_far_tests,
-            num_examples_per_batch = batch_size,
-            order = "random",
-            apply_whitening = True,
-            return_keys = ["data"]
-        ).map(lambda x: x["data"])
-        
+                
         cbc_ds = cbc_ds \
             .batch(batch_size) \
             .prefetch(tf.data.experimental.AUTOTUNE) \
@@ -250,75 +238,47 @@ if __name__ == "__main__":
             .prefetch(tf.data.experimental.AUTOTUNE) \
             .with_options(options)
         
+        
+        logging.info(f"Loading model {model_names[0]}...")
+        model = tf.keras.models.load_model(f"{skywarp_data_directory}/models/{model_names[0]}")
+        logging.info("Done.")
+        
         roc_data = {}
-        for model_name in model_names:
+        #for model_name in model_names:
+        
+        model_name = model_names[0]
             
-            logging.info(f"Loading model {model_name}...")
-            model = tf.keras.models.load_model(f"{skywarp_data_directory}/models/{model_name}")
-            logging.info("Done.")
-                
-            """         
-            logging.info(f"Calculate {model_name} ROC data...")
-            fpr, tpr, roc_auc = calculate_roc_data(model, balanced_dataset)
-            roc_data = {'fpr': fpr, 'tpr': tpr, 'roc_auc': roc_auc}
-            logging.info("Done.")
-
-            logging.info(f"Calculating {model_name} efficiency scores...")
-            path_suffix = f"{skywarp_data_directory}/datasets/cbc"
-            efficiency_scores = calculate_efficiency_scores(model, path_suffix, batch_size, options)
-            logging.info("Done.")
-            """
-                        
-            logging.info(f"Calculating {model_name} FAR scores...")
-            far_scores = calculate_far_scores(model, real_noise_ds, num_examples=num_far_tests)
-            logging.info("Done.")
-            
-            quit()
-            
-            logging.info(f"Saving {model_name} validation data...")
-            save_data_to_hdf5(model_name, "white_noise", roc_data, efficiency_scores, far_scores)
-            logging.info("Done.")
-
-            # Force garbage collection
-            gc.collect()
-                
         # Create TensorFlow dataset from the generator
-        noise_ds = tf.data.Dataset.from_generator(
-            generator=lambda: gaussian_noise_generator(num_samples=num_samples),
-            output_signature=(
-                tf.TensorSpec(shape=(num_samples,), dtype=tf.float16),
-                tf.TensorSpec(shape=(), dtype=tf.float32),
-            )
-        ).batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE).with_options(options)
-        
-        balanced_dataset = cbc_ds.concatenate(noise_ds \
-            .take(tf.data.experimental.cardinality(cbc_ds).numpy())) \
-            .prefetch(tf.data.experimental.AUTOTUNE) \
-            .with_options(options)
-        
-        for model_name in model_names:
-            
-            logging.info(f"Loading model {model_name}...")
-            model = tf.keras.models.load_model(f"{skywarp_data_directory}/models/{model_name}")
-            logging.info("Done.")
-                        
-            logging.info(f"Calculate {model_name} ROC data...")
-            fpr, tpr, roc_auc = calculate_roc_data(model, balanced_dataset)
-            roc_data = {'fpr': fpr, 'tpr': tpr, 'roc_auc': roc_auc}
-            logging.info("Done.")
+        real_noise_ds = get_ifo_data_generator(
+            time_interval = O3,
+            data_labels = ["noise", "glitches"],
+            ifo = "L1",
+            sample_rate_hertz = sample_rate_hertz,
+            example_duration_seconds = example_duration_seconds,
+            max_segment_size = 3600,
+            num_examples_per_batch = batch_size,
+            order = "random",
+            apply_whitening = True,
+            return_keys = ["data"],
+            save_segment_data = True
+        ).map(lambda x: x["data"]) \
+        .prefetch(tf.data.experimental.AUTOTUNE) \
+        .with_options(options)
 
-            logging.info(f"Calculating {model_name} efficiency scores...")
-            path_suffix = f"{skywarp_data_directory}/datasets/cbc"
-            efficiency_scores = calculate_efficiency_scores(model, path_suffix, batch_size, options)
-            logging.info("Done.")
-                        
-            logging.info(f"Calculating {model_name} FAR scores...")
-            far_scores = calculate_far_scores(model, noise_ds, num_examples=num_far_tests)
-            logging.info("Done.")
-            
-            logging.info(f"Saving {model_name} validation data...")
-            save_data_to_hdf5(model_name, "real_noise", roc_data, efficiency_scores, far_scores)
-            logging.info("Done.")
+        logging.info(f"Calculate {model_name} ROC data...")
+        fpr, tpr, roc_auc = calculate_roc_data(model, balanced_dataset)
+        roc_data = {'fpr': fpr, 'tpr': tpr, 'roc_auc': roc_auc}
+        logging.info("Done.")
 
-            # Force garbage collection
-            gc.collect()
+        logging.info(f"Calculating {model_name} efficiency scores...")
+        path_suffix = f"{skywarp_data_directory}/datasets/cbc"
+        efficiency_scores = calculate_efficiency_scores(model, path_suffix, batch_size, options)
+        logging.info("Done.")
+
+        logging.info(f"Calculating {model_name} FAR scores...")
+        far_scores = calculate_far_scores(model, real_noise_ds, num_examples=num_far_tests)
+        logging.info("Done.")
+
+        logging.info(f"Saving {model_name} validation data...")
+        save_data_to_hdf5(model_name, "real_noise", roc_data, efficiency_scores, far_scores)
+        logging.info("Done.")
