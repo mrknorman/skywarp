@@ -293,7 +293,6 @@ if __name__ == "__main__":
 
     # Define data types
     data_types = [
-        ("white_noise", "White Noise"),
         ("real_noise", "Real Noise")
     ]
     

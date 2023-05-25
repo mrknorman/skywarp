@@ -22,8 +22,6 @@ import gc
 from tqdm import tqdm
 from common_functions import *
 
-import cupy
-
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
 
@@ -106,7 +104,7 @@ def calculate_roc_data(model, dataset):
     y_true = y_true_dataset.reduce(tf.constant([], dtype=tf.float32), concat_labels)
 
     # Get the model predictions
-    y_scores = model.predict(x_dataset, verbose = 1)[:, 1]
+    y_scores = model.predict(x_dataset, verbose = 2)[:, 1]
 
     # Calculate the ROC curve and AUC
     fpr, tpr, roc_auc = roc_curve_and_auc(y_true, y_scores)
@@ -134,7 +132,7 @@ def calculate_efficiency_scores(
         combined_dataset = combined_dataset.concatenate(ds)
 
     # Process all examples in one go
-    combined_scores = model.predict(combined_dataset, verbose = 1)
+    combined_scores = model.predict(combined_dataset, verbose = 2)
 
     # Split predictions back into separate arrays for each SNR level
     scores = []
@@ -146,11 +144,12 @@ def calculate_efficiency_scores(
 
     return scores
 
-def calculate_far_scores(model, noise_ds, num_examples=1E5):
+def calculate_far_scores(model, noise_ds, batch_size, num_examples=1E5):
     num_steps = int(num_examples // batch_size)
+    noise_ds = noise_ds.take(num_examples)
     
     # Predict the scores and get the second column ([:, 1])
-    far_scores = model.predict(noise_ds, steps = num_steps, verbose=1)[:, 1]
+    far_scores = model.predict(noise_ds, steps = num_steps, verbose=2)[:, 1]
     
     return far_scores
 
@@ -189,7 +188,7 @@ if __name__ == "__main__":
     skywarp_data_directory = "../skywarp_data/"
     
     batch_size    = 512
-    num_far_tests = int(1E7)
+    num_far_tests = int(1E4)
     sample_rate_hertz = 8192.0
     example_duration_seconds = 1.0
     
@@ -201,7 +200,7 @@ if __name__ == "__main__":
     ]
         
     # Load datasets:
-    strategy = setup_cuda("4, 5", verbose = True)
+    strategy = setup_cuda("4, 5, 6, 7", verbose = True)
         
     policy = mixed_precision.Policy('mixed_float16')
     mixed_precision.set_global_policy(policy)
@@ -238,47 +237,57 @@ if __name__ == "__main__":
             .prefetch(tf.data.experimental.AUTOTUNE) \
             .with_options(options)
         
-        
-        logging.info(f"Loading model {model_names[0]}...")
-        model = tf.keras.models.load_model(f"{skywarp_data_directory}/models/{model_names[0]}")
-        logging.info("Done.")
-        
-        roc_data = {}
-        #for model_name in model_names:
-        
-        model_name = model_names[0]
+        for model_name in model_names:
             
-        # Create TensorFlow dataset from the generator
-        real_noise_ds = get_ifo_data_generator(
-            time_interval = O3,
-            data_labels = ["noise", "glitches"],
-            ifo = "L1",
-            sample_rate_hertz = sample_rate_hertz,
-            example_duration_seconds = example_duration_seconds,
-            max_segment_size = 3600,
-            num_examples_per_batch = batch_size,
-            order = "random",
-            apply_whitening = True,
-            return_keys = ["data"],
-            save_segment_data = True
-        ).map(lambda x: x["data"]) \
-        .prefetch(tf.data.experimental.AUTOTUNE) \
-        .with_options(options)
+            logging.info(f"Loading model {model_names[0]}...")
+            model = tf.keras.models.load_model(f"{skywarp_data_directory}/models/{model_names[0]}")
+            logging.info("Done.")
+        
+            roc_data = {}  
+            
+            # Create TensorFlow dataset from the generator
+            real_noise_ds = get_ifo_data_generator(
+                time_interval = O3,
+                data_labels = ["noise", "glitches"],
+                ifo = "L1",
+                sample_rate_hertz = sample_rate_hertz,
+                example_duration_seconds = example_duration_seconds,
+                max_segment_size = 3600,
+                num_examples_per_batch = batch_size,
+                order = "random",
+                apply_whitening = True,
+                return_keys = ["data"],
+                save_segment_data = True
+            ).map(lambda x: x["data"]) \
+            .prefetch(tf.data.experimental.AUTOTUNE) \
+            .with_options(options)
 
-        logging.info(f"Calculate {model_name} ROC data...")
-        fpr, tpr, roc_auc = calculate_roc_data(model, balanced_dataset)
-        roc_data = {'fpr': fpr, 'tpr': tpr, 'roc_auc': roc_auc}
-        logging.info("Done.")
+            logging.info(f"Calculate {model_name} ROC data...")
+            fpr, tpr, roc_auc = calculate_roc_data(model, balanced_dataset)
+            roc_data = {'fpr': fpr, 'tpr': tpr, 'roc_auc': roc_auc}
+            logging.info("Done.")
 
-        logging.info(f"Calculating {model_name} efficiency scores...")
-        path_suffix = f"{skywarp_data_directory}/datasets/cbc"
-        efficiency_scores = calculate_efficiency_scores(model, path_suffix, batch_size, options)
-        logging.info("Done.")
+            logging.info(f"Calculating {model_name} efficiency scores...")
+            path_suffix = f"{skywarp_data_directory}/datasets/cbc"
+            efficiency_scores = \
+                calculate_efficiency_scores(
+                    model, 
+                    path_suffix, 
+                    32, 
+                    options
+                )
+            logging.info("Done.")
 
-        logging.info(f"Calculating {model_name} FAR scores...")
-        far_scores = calculate_far_scores(model, real_noise_ds, num_examples=num_far_tests)
-        logging.info("Done.")
+            logging.info(f"Calculating {model_name} FAR scores...")
+            far_scores = \
+                calculate_far_scores(
+                    model, 
+                    real_noise_ds, 
+                    batch_size, 
+                    num_examples=num_far_tests
+                )
+            logging.info("Done.")
 
-        logging.info(f"Saving {model_name} validation data...")
-        save_data_to_hdf5(model_name, "real_noise", roc_data, efficiency_scores, far_scores)
-        logging.info("Done.")
+            logging.info(f"Saving {model_name} validation data...")
+            save_data_to_hdf5(model_name, "real_noise", roc_data, efficiency_scores, far_scores)
+            logging.info("Done.")
