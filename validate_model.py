@@ -146,7 +146,7 @@ def calculate_efficiency_scores(
 
 def calculate_far_scores(model, noise_ds, batch_size, num_examples=1E5):
     num_steps = int(num_examples // batch_size)
-    noise_ds = noise_ds.take(num_examples)
+    noise_ds = noise_ds.take(num_steps)
     
     # Predict the scores and get the second column ([:, 1])
     far_scores = model.predict(noise_ds, steps = num_steps, verbose=2)[:, 1]
