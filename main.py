@@ -6,6 +6,9 @@ from functools import partial
 from tensorflow.keras import mixed_precision
 from tensorflow.keras import backend as K
 
+import sys
+import argparse
+
 import numpy as np
 
 from tensorflow import keras
@@ -14,15 +17,14 @@ from tensorflow.keras import layers
 
 import matplotlib.pyplot as plt
 
-from common_functions import *
+from py_ml_tools.dataset import get_ifo_data_generator, O3
+from py_ml_tools.setup   import setup_cuda, find_available_GPUs
+
+from tensorflow.data.experimental import AutoShardPolicy
 
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
 
-strategy = setup_CUDA(True, "3,4,5,6,7")
-
-policy = mixed_precision.Policy('mixed_float16')
-mixed_precision.set_global_policy(policy)
+from tensorflow.keras.callbacks import Callback
 
 def calculateEquivilentKernelSize(kernel_size, dilation_size):
 	
@@ -34,10 +36,6 @@ def calculateConvOuputSize(input_size, kernel_size, stride_size, dilation_size):
 	
 	return int(((input_size - kernel_size) / stride_size ) + 1)
 
-def get_element_shape(dataset):
-    for element in dataset:
-        return element['strain'].shape[1:]
-    
 def residual_block(inputs, kernel_size, num_kernels, num_layers):
     
     x = inputs
@@ -107,7 +105,7 @@ def residual_block(inputs, kernel_size, num_kernels, num_layers):
     return x + inputs
 
 def build_cnn_head(input_shape, x):
-    x = layers.Reshape((input_shape[-1], 1))(x)
+    x = layers.Reshape((input_shape, 1))(x)
     x = layers.Conv1D(64, 8, activation="relu", padding = "same")(x)
     x = layers.MaxPool1D(8)(x)
     x = layers.Conv1D(32, 8, activation="relu", padding = "same")(x)
@@ -120,7 +118,7 @@ def build_cnn_head(input_shape, x):
     return x
 
 def build_resnet_head(input_shape, x):
-    x = layers.Reshape((input_shape[-1], 1))(x)
+    x = layers.Reshape((input_shape, 1))(x)
     x = residual_block(x, 8, int(model_dim/4), 2)
     x = layers.MaxPool1D(8)(x) 
     x = residual_block(x, 8, int(model_dim/2), 2)
@@ -142,7 +140,7 @@ def build_dense_tail(model_config, x):
         x = layers.Dense(dim, activation="relu", dtype=tf.float32)(x)
         x = layers.Dropout(mlp_dropout)(x)
         
-    x = layers.Dense(2, activation="softmax", dtype=tf.float32)(x)
+    x = layers.Dense(2, activation="softmax", dtype=tf.float32, name = "injection_masks")(x)
     
     return x
 
@@ -162,22 +160,26 @@ def build_conv_transformer(
     res_head = config["res_head"]
     conv_head = config["conv_head"]
     
-    inputs = keras.Input(shape=input_shape, name='strain')
+    inputs = keras.Input(shape=input_shape, name='onsource')
     
     model_dim = num_heads * head_size
     
     if (res_head):
         x = build_resnet_head(input_shape, inputs)
-    elif (conv_head):
-        x = build_cnn_head(input_shape, inputs)
-    else: 
-        # Segmenting
-        x = layers.Reshape((512, 16))(inputs)
-            
-    if (num_transformer_blocks > 0):
         # Embedd to higher dimensionality to increase the size of the model    
         x = layers.Conv1D(filters=model_dim, kernel_size=1, padding='valid', activation='relu')(x)
-
+    elif (conv_head):
+        x = build_cnn_head(input_shape, inputs)
+        # Embedd to higher dimensionality to increase the size of the model    
+        x = layers.Conv1D(filters=model_dim, kernel_size=1, padding='valid', activation='relu')(x)
+    else: 
+        # Segmenting
+        x = layers.Reshape((input_shape, 1))(inputs)
+        x = layers.Conv1D(filters=model_dim, kernel_size=16, activation="relu", padding = "same")(x)
+        x = layers.MaxPool1D(16)(x) 
+            
+    if (num_transformer_blocks > 0):
+        
         # positional encoding
         seq_len = x.shape[1]
         positional_encoding = positional_enc(seq_len, model_dim)  # or model_dim=1
@@ -192,9 +194,6 @@ def build_conv_transformer(
     
     outputs = build_dense_tail(model_config, x)
     return keras.Model(inputs, outputs)
-    
-def getInput(element):
-    return (element['strain'], tf.cast(element['signal_present'], tf.float32))
 
 def lr_scheduler(epoch, lr, warmup_epochs=15, decay_epochs=100, initial_lr=1e-6, base_lr=1e-3, min_lr=5e-5):
     if epoch <= warmup_epochs:
@@ -206,14 +205,34 @@ def lr_scheduler(epoch, lr, warmup_epochs=15, decay_epochs=100, initial_lr=1e-6,
         return ((base_lr - min_lr) * pct) + min_lr
 
     return min_lr
-
+    
 if __name__ == "__main__":
     
-    data_directory_path = "../skywarp_data"
-    data_dir = f"{data_directory_path}/skywarp_dataset_gaussian"
+    parser = argparse.ArgumentParser(description="A simple argument parser")
+    parser.add_argument('model_index', type=int, help="Model Index")
 
-    validation_signal_paths = [f"{data_directory_path}/datasets/cbc_10_e"]
-    validation_noise_paths  = [f"{data_directory_path}/datasets/noise_0_v"]
+    args = parser.parse_args()
+    
+    model_index = args.model_index
+    
+    gpus = find_available_GPUs(10000, 1)
+    strategy = setup_cuda(gpus, 8000, verbose = True)
+            
+    policy = mixed_precision.Policy('mixed_float16')
+    mixed_precision.set_global_policy(policy)
+    options = tf.data.Options()
+    options.experimental_distribute.auto_shard_policy = AutoShardPolicy.DATA
+    
+    # Parameters:
+    num_examples_per_batch = 32
+    sample_rate_hertz = 2048.0
+    onsource_duration_seconds = 1.0
+    max_segment_duration_seconds = 3600.0
+    data_directory_path = f"../skywarp_data_{model_index}"
+    num_train_examples = 1000000
+    num_test_examples = 10000
+    num_validate_examples = 10000
+    num_examples_per_batch = 32
 
     model_config_large = dict(
         name = "skywarp_conv_attention_large",
@@ -224,8 +243,8 @@ if __name__ == "__main__":
         ff_dim=10,
         num_transformer_blocks=10,
         mlp_units=[1024],
-        mlp_dropout=0.1,
-        dropout=0.1
+        mlp_dropout=0.5,
+        dropout=0.5
     )
     
     conv_regular = dict(
@@ -237,18 +256,18 @@ if __name__ == "__main__":
         ff_dim=8,
         num_transformer_blocks=0,
         mlp_units=[64],
-        mlp_dropout=0.1,
+        mlp_dropout=0.5,
         dropout=0.5
     )
     
     pure_attention_regular = dict(
         name = "skywarp_attention_regular",
         res_head = False,
-        conv_head = True,
+        conv_head = False,
         head_size=16,
         num_heads=8,
         ff_dim=8,
-        num_transformer_blocks=8,
+        num_transformer_blocks=6,
         mlp_units=[64],
         mlp_dropout=0.5,
         dropout=0.5
@@ -261,7 +280,7 @@ if __name__ == "__main__":
         head_size=16,
         num_heads=8,
         ff_dim=8,
-        num_transformer_blocks=8,
+        num_transformer_blocks=6,
         mlp_units=[64],
         mlp_dropout=0.5,
         dropout=0.5
@@ -280,47 +299,135 @@ if __name__ == "__main__":
         dropout=0.5
     )
     
-    test_models = [conv_regular, pure_attention_regular, conv_attention_regular, conv_attention_single]
-        
-    training_config = dict(
-        learning_rate=1e-4,
-        patience=20,
-        epochs=200,
-        batch_size=32
-    )
+    test_models = [
+        conv_regular, 
+        pure_attention_regular, 
+        conv_attention_regular, 
+        conv_attention_single
+    ]
+    
+    test_models = [test_models[model_index]]
+            
+    training_config = \
+        dict(
+            learning_rate=1e-4,
+            patience=20,
+            epochs=200,
+            batch_size=num_examples_per_batch
+        )
 
     # Load Dataset:
-    train_dataset = tfds.load(
-        "skywarp_dataset_gaussian",
-        data_dir = f"{data_directory_path}/skywarp_dataset_gaussian"
-    )['train'].batch(batch_size=training_config["batch_size"])
+    injection_configs = [
+        {
+            "type" : "cbc",
+            "snr"  : {"min_value" : 8, "max_value" : 20, "distribution_type": "uniform"},
+            "injection_chance" : 0.5,
+            "padding_seconds" : {"front" : 0.3, "back" : 0.0},
+            "args" : {
+                "mass_1_msun" : \
+                    {"min_value" : 5, "max_value": 95, "distribution_type": "uniform"},
+                "mass_2_msun" : \
+                    {"min_value" : 5, "max_value": 95, "distribution_type": "uniform"},
+                "sample_rate_hertz" : \
+                    {"value" : sample_rate_hertz, "distribution_type": "constant"},
+                "duration_seconds" : \
+                    {"value" : onsource_duration_seconds, "distribution_type": "constant"},
+                "inclination_radians" : \
+                    {"min_value" : 0, "max_value": np.pi, "distribution_type": "uniform"},
+                "distance_mpc" : \
+                    {"value" : 1000, "distribution_type": "constant"},
+                "reference_orbital_phase_in" : \
+                    {"min_value" : 0, "max_value": 2*np.pi, "distribution_type": "uniform"},
+                "ascending_node_longitude" : \
+                    {"min_value" : 0, "max_value": np.pi, "distribution_type": "uniform"},
+                "eccentricity" : \
+                    {"min_value" : 0, "max_value": 0.1, "distribution_type": "uniform"},
+                "mean_periastron_anomaly" : \
+                    {"min_value" : 0, "max_value": 2*np.pi, "distribution_type": "uniform"},
+                "spin_1_in" : \
+                    {"min_value" : -0.5, "max_value": 0.5, "distribution_type": "uniform"},
+                "spin_2_in" : \
+                    {"min_value" : -0.5, "max_value": 0.5, "distribution_type": "uniform"}
+            }
+        }
+    ]
+    
+    train_dataset = get_ifo_data_generator(
+        time_interval = O3,
+        data_labels = ["noise", "glitches"],
+        ifo = "L1",
+        injection_configs = injection_configs,
+        sample_rate_hertz = sample_rate_hertz,
+        onsource_duration_seconds = onsource_duration_seconds,
+        max_segment_size = max_segment_duration_seconds,
+        num_examples_per_batch = num_examples_per_batch,
+        data_directory = data_directory_path,
+        order = "random",
+        seed = 100,
+        apply_whitening = True,
+        input_keys = ["onsource"], 
+        output_keys = ["injection_masks"],
+        save_segment_data = True
+    ).with_options(options).take(num_train_examples//num_examples_per_batch)
+    
+    injection_configs[0].update(
+        {"snr": {"min_value" : 8, "max_value" : 20, "distribution_type": "uniform"}}
+    )
         
-    # Split Dataset:
-    signal_v_dataset = load_label_datasets(validation_signal_paths, 1)
-    noise_v_dataset = load_label_datasets(validation_noise_paths, 0)
+    test_dataset = get_ifo_data_generator(
+        time_interval = O3,
+        data_labels = ["noise", "glitches"],
+        ifo = "L1",
+        injection_configs = injection_configs,
+        sample_rate_hertz = sample_rate_hertz,
+        onsource_duration_seconds = onsource_duration_seconds,
+        max_segment_size = max_segment_duration_seconds,
+        num_examples_per_batch = num_examples_per_batch,
+        data_directory = data_directory_path,
+        order = "random",
+        seed = 101,
+        apply_whitening = True,
+        input_keys = ["onsource"], 
+        output_keys = ["injection_masks"],
+        save_segment_data = True
+    ).with_options(options).take(num_test_examples//num_examples_per_batch)
     
-    validation_dataset = signal_v_dataset.concatenate(noise_v_dataset).batch(
-            batch_size=training_config["batch_size"]
-        )
+    validation_dataset = get_ifo_data_generator(
+        time_interval = O3,
+        data_labels = ["noise", "glitches"],
+        ifo = "L1",
+        injection_configs = injection_configs,
+        sample_rate_hertz = sample_rate_hertz,
+        onsource_duration_seconds = onsource_duration_seconds,
+        max_segment_size = max_segment_duration_seconds,
+        num_examples_per_batch = num_examples_per_batch,
+        data_directory = data_directory_path,
+        order = "random",
+        seed = 102,
+        apply_whitening = True,
+        input_keys = ["onsource"], 
+        output_keys = ["injection_masks"],
+        save_segment_data = True
+    ).with_options(options).take(num_validate_examples//num_examples_per_batch)
     
-    validation_dataset, test_dataset = split_test_train(
-        validation_dataset, 0.5)
+    def transform_features_labels(features, labels):
+        labels['injection_masks'] = labels['injection_masks'][0]
+        return features, labels
     
     # Get Signal Element Shape:
-    input_shape = get_element_shape(train_dataset)
+    input_shape = int(np.ceil(onsource_duration_seconds*sample_rate_hertz))
 
-    with strategy.scope():
-        # model = tf.keras.models.load_model(f"models/skywarp_regular_c_10_10.2")
-        
+    with strategy.scope():        
         for model_config in test_models:
             
             model_name = model_config["name"]
             model_path = f"{data_directory_path}/models/{model_name}"
             
-            model = build_conv_transformer(
-                input_shape,
-                model_config
-            )
+            model = \
+                build_conv_transformer(
+                    input_shape,
+                    model_config
+                )
                     
             model.compile(
                 loss="sparse_categorical_crossentropy",
@@ -330,25 +437,84 @@ if __name__ == "__main__":
             )
             model.summary()
             
+            injection_configs[0].update(
+                {"snr": {"min_value" : 50, "max_value" : 50, "distribution_type": "uniform"}}
+            )
+            
+            def curriculum(epoch):
+                epoch += 1
+                injection_configs[0].update(
+                    {"snr": {"min_value" : np.maximum(8.0, 35.0 - epoch*5.0), "max_value" : np.maximum(20.0, 35.0 - epoch*2.5), "distribution_type": "uniform"}}
+                )
+                
+                print(injection_configs[0]['snr'])
+                
+                return get_ifo_data_generator(
+                    time_interval = O3,
+                    data_labels = ["noise", "glitches"],
+                    ifo = "L1",
+                    injection_configs = injection_configs,
+                    sample_rate_hertz = sample_rate_hertz,
+                    onsource_duration_seconds = onsource_duration_seconds,
+                    max_segment_size = max_segment_duration_seconds,
+                    num_examples_per_batch = num_examples_per_batch,
+                    data_directory = data_directory_path,
+                    order = "random",
+                    seed = 102 + epoch,
+                    apply_whitening = True,
+                    input_keys = ["onsource"], 
+                    output_keys = ["injection_masks"],
+                    save_segment_data = True
+                ).with_options(options).take(num_validate_examples//num_examples_per_batch)
+            
+            class ModifyDatasetCallback(Callback):
+                def __init__(self, train_dataset_function):
+                    super(ModifyDatasetCallback, self).__init__()
+                    self.train_dataset_function = train_dataset_function
+
+                def on_epoch_end(self, epoch, logs=None):
+                    self.model.stop_training = True  # Stop training
+                    new_dataset = self.train_dataset_function(epoch)  # Create a new dataset
+                    
+                    self.model.fit(
+                        train_dataset.map(transform_features_labels),
+                        initial_epoch = epoch +1,
+                        verbose = 1,
+                        validation_data=validation_dataset.map(transform_features_labels),
+                        epochs=training_config["epochs"],
+                        batch_size=training_config["batch_size"],
+                        callbacks=callbacks
+                    ) # Continue training with the new dataset
+                    self.model.stop_training = False  # Allow normal training process to continue
+                    
             callbacks = [
                 keras.callbacks.EarlyStopping(
+                    monitor='val_loss',
                     patience=training_config["patience"],
-                    restore_best_weights=True),
+                    restore_best_weights=True,
+                    start_from_epoch=4
+                ),
                 keras.callbacks.ModelCheckpoint(
                     model_path,
                     monitor="val_loss",
                     save_best_only=True,
                     save_freq="epoch", 
-                )
+                ),
+                #ModifyDatasetCallback(
+                 #   curriculum
+                #)
             ]
 
             history = model.fit(
-                train_dataset.map(getInput, num_parallel_calls=tf.data.AUTOTUNE),
-                validation_data=validation_dataset,
+                train_dataset.map(transform_features_labels),
+                validation_data=validation_dataset.map(transform_features_labels),
+                verbose = 1,
                 epochs=training_config["epochs"],
                 batch_size=training_config["batch_size"],
                 callbacks=callbacks
             )
+            
+            print(history)
 
             model.save(model_path)
 
@@ -370,4 +536,4 @@ if __name__ == "__main__":
             plt.legend(['train', 'validation'], loc='upper left')
             plt.savefig(f"{data_directory_path}/plots/loss_history_{model_name}")
 
-            model.evaluate(test_dataset, verbose=1)
+            model.evaluate(test_dataset.map(transform_features_labels), verbose=1)
