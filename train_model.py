@@ -26,18 +26,7 @@ import os
 
 from tensorflow.keras.callbacks import Callback
 
-def calculateEquivilentKernelSize(kernel_size, dilation_size):
-	
-	return int(kernel_size + (dilation_size - 1)*(kernel_size - 1))
-
-def calculateConvOuputSize(input_size, kernel_size, stride_size, dilation_size):
-	
-	kernel_size = calculateEquivilentKernelSize(kernel_size, dilation_size)
-	
-	return int(((input_size - kernel_size) / stride_size ) + 1)
-
 def residual_block(inputs, kernel_size, num_kernels, num_layers):
-    
     x = inputs
     for i in range(num_layers):
         x = layers.Conv1D(num_kernels, kernel_size, padding = 'same')(x) 
@@ -49,7 +38,6 @@ def residual_block(inputs, kernel_size, num_kernels, num_layers):
     return x + inputs
 
 def identity_block(inputs, kernel_size, num_kernels, num_layers):
-    
     x = inputs
     for i in range(num_layers):
         x = layers.Conv1D(num_kernels, kernel_size, padding = 'same')(x) 
@@ -311,16 +299,16 @@ if __name__ == "__main__":
     training_config = \
         dict(
             learning_rate=1e-4,
-            patience=20,
+            patience=10,
             epochs=200,
             batch_size=num_examples_per_batch
         )
 
     # Load Dataset:
-    injection_configs = [
+    injection_config = \
         {
             "type" : "cbc",
-            "snr"  : {"min_value" : 8, "max_value" : 20, "distribution_type": "uniform"},
+            "snr"  : {"min_value" : 10.0, "max_value" : 20.0, "distribution_type": "uniform"},
             "injection_chance" : 0.5,
             "padding_seconds" : {"front" : 0.3, "back" : 0.0},
             "args" : {
@@ -350,64 +338,52 @@ if __name__ == "__main__":
                     {"min_value" : -0.5, "max_value": 0.5, "distribution_type": "uniform"}
             }
         }
-    ]
+        
+    injection_configs = [injection_config]
+    
+    generator_args = {
+        "time_interval" : O3,
+        "data_labels" : ["noise", "glitches"],
+        "ifo" : "L1",
+        "injection_configs" : injection_configs,
+        "sample_rate_hertz" : sample_rate_hertz,
+        "onsource_duration_seconds" : onsource_duration_seconds,
+        "max_segment_size" : max_segment_duration_seconds,
+        "num_examples_per_batch" : num_examples_per_batch,
+        "data_directory" : data_directory_path,
+        "order" : "random",
+        "seed" : 100,
+        "apply_whitening" : True,
+        "input_keys" : ["onsource"], 
+        "output_keys" : ["injection_masks"],
+        "save_segment_data" : True
+    }
     
     train_dataset = get_ifo_data_generator(
-        time_interval = O3,
-        data_labels = ["noise", "glitches"],
-        ifo = "L1",
-        injection_configs = injection_configs,
-        sample_rate_hertz = sample_rate_hertz,
-        onsource_duration_seconds = onsource_duration_seconds,
-        max_segment_size = max_segment_duration_seconds,
-        num_examples_per_batch = num_examples_per_batch,
-        data_directory = data_directory_path,
-        order = "random",
-        seed = 100,
-        apply_whitening = True,
-        input_keys = ["onsource"], 
-        output_keys = ["injection_masks"],
-        save_segment_data = True
+        **generator_args
     ).with_options(options).take(num_train_examples//num_examples_per_batch)
     
-    injection_configs[0].update(
-        {"snr": {"min_value" : 8, "max_value" : 20, "distribution_type": "uniform"}}
-    )
+    validation_config = injection_config.copy()
+    validation_config.update({
+            "snr": {
+                "min_value" : 8.0, 
+                "max_value" : 10.0, 
+                "distribution_type": "uniform"
+            }
+    })
+    generator_args.update({
+        "injection_configs" : [validation_config],
+        "seed" : 101
+    })    
         
     test_dataset = get_ifo_data_generator(
-        time_interval = O3,
-        data_labels = ["noise", "glitches"],
-        ifo = "L1",
-        injection_configs = injection_configs,
-        sample_rate_hertz = sample_rate_hertz,
-        onsource_duration_seconds = onsource_duration_seconds,
-        max_segment_size = max_segment_duration_seconds,
-        num_examples_per_batch = num_examples_per_batch,
-        data_directory = data_directory_path,
-        order = "random",
-        seed = 101,
-        apply_whitening = True,
-        input_keys = ["onsource"], 
-        output_keys = ["injection_masks"],
-        save_segment_data = True
+        **generator_args
     ).with_options(options).take(num_test_examples//num_examples_per_batch)
     
+    generator_args.update({"seed" : 102})
+    
     validation_dataset = get_ifo_data_generator(
-        time_interval = O3,
-        data_labels = ["noise", "glitches"],
-        ifo = "L1",
-        injection_configs = injection_configs,
-        sample_rate_hertz = sample_rate_hertz,
-        onsource_duration_seconds = onsource_duration_seconds,
-        max_segment_size = max_segment_duration_seconds,
-        num_examples_per_batch = num_examples_per_batch,
-        data_directory = data_directory_path,
-        order = "random",
-        seed = 102,
-        apply_whitening = True,
-        input_keys = ["onsource"], 
-        output_keys = ["injection_masks"],
-        save_segment_data = True
+        **generator_args
     ).with_options(options).take(num_validate_examples//num_examples_per_batch)
     
     def transform_features_labels(features, labels):
@@ -437,18 +413,12 @@ if __name__ == "__main__":
             )
             model.summary()
             
-            injection_configs[0].update(
-                {"snr": {"min_value" : 50, "max_value" : 50, "distribution_type": "uniform"}}
-            )
-            
             def curriculum(epoch):
                 epoch += 1
                 injection_configs[0].update(
-                    {"snr": {"min_value" : np.maximum(8.0, 35.0 - epoch*5.0), "max_value" : np.maximum(20.0, 35.0 - epoch*2.5), "distribution_type": "uniform"}}
+                    {"snr": {"min_value" : np.maximum(10.0, 35.0 - epoch*5.0), "max_value" : np.maximum(20.0, 35.0 - epoch*2.5), "distribution_type": "uniform"}}
                 )
-                
-                print(injection_configs[0]['snr'])
-                
+                                
                 return get_ifo_data_generator(
                     time_interval = O3,
                     data_labels = ["noise", "glitches"],
@@ -479,7 +449,7 @@ if __name__ == "__main__":
                     self.model.fit(
                         train_dataset.map(transform_features_labels),
                         initial_epoch = epoch +1,
-                        verbose = 1,
+                        verbose = 2,
                         validation_data=validation_dataset.map(transform_features_labels),
                         epochs=training_config["epochs"],
                         batch_size=training_config["batch_size"],
@@ -508,7 +478,7 @@ if __name__ == "__main__":
             history = model.fit(
                 train_dataset.map(transform_features_labels),
                 validation_data=validation_dataset.map(transform_features_labels),
-                verbose = 1,
+                verbose = 2,
                 epochs=training_config["epochs"],
                 batch_size=training_config["batch_size"],
                 callbacks=callbacks
@@ -536,4 +506,6 @@ if __name__ == "__main__":
             plt.legend(['train', 'validation'], loc='upper left')
             plt.savefig(f"{data_directory_path}/plots/loss_history_{model_name}")
 
-            model.evaluate(test_dataset.map(transform_features_labels), verbose=1)
+            print(
+                model.evaluate(test_dataset.map(transform_features_labels), verbose=1) 
+            )

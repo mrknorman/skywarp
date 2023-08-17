@@ -146,7 +146,7 @@ def plot_efficiency_curves(model_names, model_titles, model_data, thresholds, ou
     plot_height = 600
     colors = cycle(['red', 'blue', 'green', 'orange'])
 
-    snr = np.linspace(0, 10, 21)
+    snr = np.linspace(0, 10, 41)
     p = figure(
         width=plot_width,
         height=plot_height,
@@ -177,8 +177,9 @@ def plot_efficiency_curves(model_names, model_titles, model_data, thresholds, ou
                     total = np.sum(score >= threshold)
                 else:
                     total = np.sum(score > threshold)
+                                        
                 acc.append(total / len(score))
-
+            
             acc_all_fars.append(acc)
 
         acc_data[name] = acc_all_fars
@@ -309,7 +310,7 @@ if __name__ == "__main__":
         
     # Calculate thresholds
     thresholds = calculate_far_score_thresholds(model_names, data, fars, restriction)
-    
+        
     output_path = "../skywarp_data/efficiency_curves.html"
     plot_efficiency_curves(model_names, model_titles, data, thresholds, output_path)
     

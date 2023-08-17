@@ -8,14 +8,15 @@ from tensorflow.data import Dataset
 from tensorflow.keras import mixed_precision, layers
 from tensorflow.keras import backend as K
 from tensorflow.data.experimental import AutoShardPolicy
+from functools import reduce
 
-from py_ml_tools.dataset import get_ifo_data, O3, get_ifo_data_generator
-from py_ml_tools.setup import setup_cuda
+from py_ml_tools.dataset  import get_ifo_data, O3, get_ifo_data_generator
+from py_ml_tools.setup    import setup_cuda, find_available_GPUs
+from py_ml_tools.validate import calculate_efficiency_scores
 
 import matplotlib.pyplot as plt
 
 import h5py
-
 
 import gc
 
@@ -92,105 +93,49 @@ def roc_curve_and_auc(y_true, y_scores, chunk_size=500):
 
     return fpr, tpr, auc
 
-def concat_labels(x, y):
-    return tf.concat([x, y], axis=0)
-
 def calculate_roc_data(model, dataset):
     # Use .map() to extract the true labels and model inputs
     x_dataset = dataset.map(lambda x, y: x)
-    y_true_dataset = dataset.map(lambda x, y: y)
-
+    y_true_dataset = dataset.map(lambda x, y: tf.cast(y['injection_masks'][0], tf.int32))
+        
     # Convert the true labels dataset to a tensor using reduce
-    y_true = y_true_dataset.reduce(tf.constant([], dtype=tf.float32), concat_labels)
+    tensor_list = []
+    for batch in y_true_dataset:
+        tensor_list.append(batch)
+
+    y_true = tf.concat(tensor_list, axis=0)
 
     # Get the model predictions
-    y_scores = model.predict(x_dataset, verbose = 2)[:, 1]
+    y_scores = model.predict(x_dataset, verbose = 1)[:, 1]
 
     # Calculate the ROC curve and AUC
     fpr, tpr, roc_auc = roc_curve_and_auc(y_true, y_scores)
 
     return fpr.numpy(), tpr.numpy(), roc_auc.numpy()
 
-def calculate_efficiency_scores(
-        model, 
-        path_suffix, 
-        batch_size, 
-        options
-    ):
-    
-    snr_levels = np.linspace(0.0, 10.0, 21)
-    snr_datasets = []
-    
-    for snr_level in snr_levels:
-        path = [f"{path_suffix}_{snr_level}_e"]
-        dataset = load_datasets(path).with_options(options)
-        snr_datasets.append(dataset.batch(batch_size))
-
-    # Concatenate all datasets into a single large dataset
-    combined_dataset = snr_datasets[0].concatenate(snr_datasets[1])
-    for ds in snr_datasets[2:]:
-        combined_dataset = combined_dataset.concatenate(ds)
-
-    # Process all examples in one go
-    combined_scores = model.predict(combined_dataset, verbose = 2)
-
-    # Split predictions back into separate arrays for each SNR level
-    scores = []
-    start_index = 0
-    for ds in snr_datasets:
-        ds_size = tf.data.experimental.cardinality(ds).numpy() * batch_size  # Calculate the total number of examples in the dataset
-        scores.append(combined_scores[start_index:start_index + ds_size])
-        start_index += ds_size
-
-    return scores
-
-def calculate_far_scores(model, noise_ds, batch_size, num_examples=1E5):
-    num_steps = int(num_examples // batch_size)
+def calculate_far_scores(model, noise_ds, num_examples_per_batch, num_examples=1E5):
+    num_steps = int(num_examples // num_examples_per_batch)
     noise_ds = noise_ds.take(num_steps)
     
     # Predict the scores and get the second column ([:, 1])
     far_scores = model.predict(noise_ds, steps = num_steps, verbose=2)[:, 1]
     
     return far_scores
-
-def load_cbc_datasets(data_directory_path, num_to_load):
-    dataset_prefix = f"{data_directory_path}/datasets/cbc"
-    dataset_paths = [f"{dataset_prefix}_{i}_v" for i in range(num_to_load)]
-    
-    # Check for existing dataset paths
-    existing_paths = []
-    for path in dataset_paths:
-        if os.path.exists(path):
-            existing_paths.append(path)
-        else:
-            print(f"Warning: {path} does not exist.")
-    
-    # Load the datasets with existing paths
-    dataset = load_label_datasets(existing_paths, 1)
-    
-    return dataset
-
-def get_element_shape(dataset):
-    for element in dataset.take(1):
-        return element[0].shape
-
-def gaussian_noise_generator(num_samples=8192):
-    while True:
-        noise = tf.random.normal([num_samples], dtype=tf.float16)
-        constant = tf.constant(0.0, dtype=tf.float32)
-        yield noise, constant
-        
-def add_noise_label(element):
-    return element, tf.constant(0.0, shape = element.shape, dtype=tf.float32)
                             
 if __name__ == "__main__":
-    # User parameters:
-    skywarp_data_directory = "../skywarp_data/"
     
-    batch_size    = 512
-    num_far_tests = int(1E4)
-    sample_rate_hertz = 8192.0
-    example_duration_seconds = 1.0
+    # User parameters:
+    skywarp_data_directory       = "../skywarp_data_0/"
+    num_examples_per_batch       = 32
+    num_far_tests                = int(1E4)
+    sample_rate_hertz            = 2048.0
+    max_segment_duration_seconds = 2048.0
+    onsource_duration_seconds    = 1.0
+    
+    data_directory_path = "./skywarp_data"
+    
+    gpus = find_available_GPUs(10000, 1)
+    strategy = setup_cuda(gpus, 8000, verbose = True)
     
     model_names = [
         "skywarp_conv_attention_regular", 
@@ -198,10 +143,8 @@ if __name__ == "__main__":
         "skywarp_conv_attention_single", 
         "skywarp_conv_regular"
     ]
-        
+    
     # Load datasets:
-    strategy = setup_cuda("4, 5, 6, 7", verbose = True)
-        
     policy = mixed_precision.Policy('mixed_float16')
     mixed_precision.set_global_policy(policy)
     options = tf.data.Options()
@@ -210,84 +153,175 @@ if __name__ == "__main__":
     with strategy.scope():
         
         logging.basicConfig(level=logging.INFO)
+        
+        # Load Dataset:
+        injection_config = \
+            {
+                "type" : "cbc",
+                "snr"  : {
+                    "min_value" : 8, 
+                    "max_value" : 20, 
+                    "distribution_type": "uniform"
+                },
+                "injection_chance" : 1.0,
+                "padding_seconds" : {"front" : 0.3, "back" : 0.0},
+                "args" : {
+                    "mass_1_msun" : \
+                        {"min_value" : 5, 
+                         "max_value": 95, 
+                         "distribution_type": 
+                         "uniform"},
+                    "mass_2_msun" : \
+                        {"min_value" : 5, 
+                         "max_value": 95, 
+                         "distribution_type": "uniform"
+                        },
+                    "sample_rate_hertz" : \
+                        {"value" : sample_rate_hertz,
+                         "distribution_type": "constant"
+                        },
+                    "duration_seconds" : \
+                        {"value" : onsource_duration_seconds, 
+                         "distribution_type": "constant"
+                        },
+                    "inclination_radians" : \
+                        {"min_value" : 0, 
+                         "max_value": np.pi, 
+                         "distribution_type": "uniform"
+                        },
+                    "distance_mpc" : \
+                        {"value" : 1000, 
+                         "distribution_type": "constant"
+                        },
+                    "reference_orbital_phase_in" : \
+                        {"min_value" : 0, 
+                         "max_value": 2*np.pi, 
+                         "distribution_type": "uniform"
+                        },
+                    "ascending_node_longitude" : \
+                        {"min_value" : 0, 
+                         "max_value": np.pi,
+                         "distribution_type": "uniform"
+                        },
+                    "eccentricity" : \
+                        {
+                        "min_value" : 0, "max_value": 0.1, 
+                        "distribution_type": "uniform"
+                        },
+                    "mean_periastron_anomaly" : \
+                        {"min_value" : 0, 
+                         "max_value": 2*np.pi, 
+                         "distribution_type": "uniform"
+                        },
+                    "spin_1_in" : \
+                        {"min_value" : -0.5, 
+                         "max_value": 0.5, 
+                         "distribution_type": "uniform"
+                        },
+                    "spin_2_in" : \
+                        {
+                        "min_value" : -0.5,
+                        "max_value": 0.5, 
+                        "distribution_type": "uniform"
+                        }
+                }
+            }
 
-        cbc_ds = load_cbc_datasets(skywarp_data_directory, 1)
-        num_samples = get_element_shape(cbc_ds)[0]
+        injection_configs = [injection_config]
+
+        cbc_args = {
+            "time_interval" : O3,
+            "data_labels" : ["noise", "glitches"],
+            "ifo" : "L1",
+            "injection_configs" : injection_configs,
+            "sample_rate_hertz" : sample_rate_hertz,
+            "onsource_duration_seconds" : onsource_duration_seconds,
+            "max_segment_size" : max_segment_duration_seconds,
+            "num_examples_per_batch" : num_examples_per_batch,
+            "data_directory" : data_directory_path,
+            "order" : "random",
+            "seed" : 200,
+            "apply_whitening" : True,
+            "input_keys" : ["onsource"], 
+            "output_keys" : ["injection_masks"],
+            "save_segment_data" : True
+        }
         
-         # Create TensorFlow dataset from the generator
-        noise_ds = tf.data.Dataset.from_generator(
-            generator=lambda: gaussian_noise_generator(num_samples=num_samples),
-            output_signature=(
-                tf.TensorSpec(shape=(num_samples,), dtype=tf.float16),
-                tf.TensorSpec(shape=(), dtype=tf.float32),
-            )
-        ).batch(batch_size)
-                
-        cbc_ds = cbc_ds \
-            .batch(batch_size) \
-            .prefetch(tf.data.experimental.AUTOTUNE) \
-            .with_options(options)
+        cbc_ds = get_ifo_data_generator(
+            **cbc_args
+        ).with_options(options)
         
-        noise_ds = noise_ds \
-            .prefetch(tf.data.experimental.AUTOTUNE) \
-            .with_options(options)
+        balanced_args = cbc_args.copy()
+
+        balanced_config = injection_config.copy()
+        balanced_config.update({"injection_chance": 0.5})
+        balanced_args.update({
+            "injection_configs" : [balanced_config],
+        })
         
-        balanced_dataset = cbc_ds.concatenate(noise_ds \
-            .take(tf.data.experimental.cardinality(cbc_ds).numpy())) \
-            .prefetch(tf.data.experimental.AUTOTUNE) \
-            .with_options(options)
+        balanced_dataset = get_ifo_data_generator(
+            **balanced_args
+        ).with_options(options)
+        
+        noise_args = cbc_args.copy()
+        
+        noise_args.update({
+            "injection_configs" : [],
+            "output_keys" : []
+        })
+            
+        noise_ds = get_ifo_data_generator(
+            **noise_args
+        ).with_options(options)
         
         for model_name in model_names:
             
-            logging.info(f"Loading model {model_names[0]}...")
-            model = tf.keras.models.load_model(f"{skywarp_data_directory}/models/{model_names[0]}")
+            logging.info(f"Loading model {model_name}...")
+            model = tf.keras.models.load_model(
+                f"{skywarp_data_directory}/models/{model_name}"
+            )
             logging.info("Done.")
         
             roc_data = {}  
-            
-            # Create TensorFlow dataset from the generator
-            real_noise_ds = get_ifo_data_generator(
-                time_interval = O3,
-                data_labels = ["noise", "glitches"],
-                ifo = "L1",
-                sample_rate_hertz = sample_rate_hertz,
-                example_duration_seconds = example_duration_seconds,
-                max_segment_size = 3600,
-                num_examples_per_batch = batch_size,
-                order = "random",
-                apply_whitening = True,
-                return_keys = ["data"],
-                save_segment_data = True
-            ).map(lambda x: x["data"]) \
-            .prefetch(tf.data.experimental.AUTOTUNE) \
-            .with_options(options)
 
             logging.info(f"Calculate {model_name} ROC data...")
-            fpr, tpr, roc_auc = calculate_roc_data(model, balanced_dataset)
+            
+            fpr, tpr, roc_auc = calculate_roc_data(
+                model, balanced_dataset.take(1000//num_examples_per_batch)
+            )
             roc_data = {'fpr': fpr, 'tpr': tpr, 'roc_auc': roc_auc}
             logging.info("Done.")
-
+            
             logging.info(f"Calculating {model_name} efficiency scores...")
             path_suffix = f"{skywarp_data_directory}/datasets/cbc"
             efficiency_scores = \
                 calculate_efficiency_scores(
                     model, 
-                    path_suffix, 
-                    32, 
-                    options
+                    cbc_args,
+                    32,
+                    10.0,
+                    41,
+                    8192
                 )
             logging.info("Done.")
 
             logging.info(f"Calculating {model_name} FAR scores...")
+            
             far_scores = \
                 calculate_far_scores(
                     model, 
-                    real_noise_ds, 
-                    batch_size, 
+                    noise_ds, 
+                    num_examples_per_batch, 
                     num_examples=num_far_tests
                 )
             logging.info("Done.")
 
             logging.info(f"Saving {model_name} validation data...")
-            save_data_to_hdf5(model_name, "real_noise", roc_data, efficiency_scores, far_scores)
+            save_data_to_hdf5(
+                model_name, 
+                "real_noise", 
+                roc_data, 
+                efficiency_scores, 
+                far_scores
+            )
             logging.info("Done.")
