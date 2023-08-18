@@ -325,7 +325,7 @@ if __name__ == "__main__":
                 "distance_mpc" : \
                     {"value" : 1000, "distribution_type": "constant"},
                 "reference_orbital_phase_in" : \
-                    {"min_value" : 0, "max_value": 2*np.pi, "distribution_type": "uniform"},
+                    {"min_value" : 0, "max_value": 2.0*np.pi, "distribution_type": "uniform"},
                 "ascending_node_longitude" : \
                     {"min_value" : 0, "max_value": np.pi, "distribution_type": "uniform"},
                 "eccentricity" : \

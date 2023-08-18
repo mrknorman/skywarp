@@ -18,7 +18,6 @@ if __name__ == "__main__":
     data = {}
     validators = []
     for model_name in model_names:
-        
         validators.append(
             Validator.load(data_directory / f"{model_name}_validation_data.h5")
         )
