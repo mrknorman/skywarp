@@ -1,13 +1,10 @@
-import numpy as np
-
-from py_ml_tools.validate import Validator, plot_efficiency_curves, plot_far_curves, plot_roc_curves
+from py_ml_tools.validate import Validator
 from pathlib import Path
 
 if __name__ == "__main__":
     
     # User parameters:
     data_directory = Path("../skywarp_data_0/")
-    fars = np.logspace(-1, -7, 500)
     model_names = [
         "skywarp_attention_regular", 
         "skywarp_conv_attention_regular", 
@@ -22,18 +19,9 @@ if __name__ == "__main__":
             Validator.load(data_directory / f"{model_name}_validation_data.h5")
         )
         
-    plot_efficiency_curves(
-        validators, 
-        fars, 
-        data_directory / "efficiency_curves.html"
+    validators[0].plot(
+        data_directory / "validation_plots.html",
+        comparison_validators = validators[1:]
     )
+        
     
-    plot_far_curves(
-        validators,
-        data_directory / "far_curves.html"
-    )
-    
-    plot_roc_curves(
-        validators,
-        data_directory / "roc_curves.html"
-    )

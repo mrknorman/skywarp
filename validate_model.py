@@ -173,6 +173,18 @@ if __name__ == "__main__":
                     roc_config
                 )
             
+            # Save validation data:
             validator.save(
                 skywarp_data_directory / f"{model_name}_validation_data.h5", 
             )
+            
+            # Plot validation data:
+            validator.plot(
+                skywarp_data_directory / f"{model_name}_validation_plots.html"
+            )
+            
+    # Plot all model validation data comparison:            
+    validators[0].plot(
+        data_directory / "validation_plots.html",
+        comparison_validators = validators[1:]
+    )

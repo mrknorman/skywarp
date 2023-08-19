@@ -183,7 +183,16 @@ def build_conv_transformer(
     outputs = build_dense_tail(model_config, x)
     return keras.Model(inputs, outputs)
 
-def lr_scheduler(epoch, lr, warmup_epochs=15, decay_epochs=100, initial_lr=1e-6, base_lr=1e-3, min_lr=5e-5):
+def lr_scheduler(
+        epoch, 
+        lr, 
+        warmup_epochs=15, 
+        decay_epochs=100, 
+        initial_lr=1e-6, 
+        base_lr=1e-3,
+        min_lr=5e-5
+    ):
+    
     if epoch <= warmup_epochs:
         pct = epoch / warmup_epochs
         return ((base_lr - initial_lr) * pct) + initial_lr
