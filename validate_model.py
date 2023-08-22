@@ -20,22 +20,22 @@ if __name__ == "__main__":
     skywarp_data_directory       = Path("../skywarp_data_0/")
     num_examples_per_batch       = 32
     sample_rate_hertz            = 2048.0
-    max_segment_duration_seconds = 2048.0
+    max_segment_duration_seconds = 1024.0
     onsource_duration_seconds    = 1.0
     
     efficiency_config = \
         {
             "max_snr" : 20.0, 
-            "num_snr_steps" : 41, 
-            "num_examples_per_snr_step" : 8192
+            "num_snr_steps" : 11, 
+            "num_examples_per_snr_step" : 8192//8
         }
     far_config = \
         {
-            "num_examples" : 1.0E6
+            "num_examples" : 1.0E3
         }
     roc_config : dict = \
         {
-            "num_examples" : 1.0E6,
+            "num_examples" : 1.0E3,
             "snr_ranges" :  [
                 (8.0, 20.0),
                 8.0,
@@ -113,7 +113,7 @@ if __name__ == "__main__":
                         },
                     "eccentricity" : \
                         {
-                        "min_value" : 0, "max_value": 0.1, 
+                        "min_value" : 0, "max_value": 0.0, 
                         "distribution_type": "uniform"
                         },
                     "mean_periastron_anomaly" : \
@@ -122,14 +122,14 @@ if __name__ == "__main__":
                          "distribution_type": "uniform"
                         },
                     "spin_1_in" : \
-                        {"min_value" : -0.5, 
-                         "max_value": 0.5, 
+                        {"min_value" : 0, 
+                         "max_value": 0, 
                          "distribution_type": "uniform"
                         },
                     "spin_2_in" : \
                         {
-                        "min_value" : -0.5,
-                        "max_value": 0.5, 
+                        "min_value" : 0,
+                        "max_value": 0, 
                         "distribution_type": "uniform"
                         }
                 }
@@ -153,6 +153,7 @@ if __name__ == "__main__":
             "save_segment_data" : True
         }
         
+        validators = []
         for model_name in model_names:
             
             logging.info(f"Loading model {model_name}...")
@@ -183,8 +184,10 @@ if __name__ == "__main__":
                 skywarp_data_directory / f"{model_name}_validation_plots.html"
             )
             
+            validators.append(validator)
+            
     # Plot all model validation data comparison:            
     validators[0].plot(
-        data_directory / "validation_plots.html",
+        skywarp_data_directory / "validation_plots.html",
         comparison_validators = validators[1:]
     )
