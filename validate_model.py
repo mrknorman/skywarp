@@ -113,23 +113,23 @@ if __name__ == "__main__":
                         },
                     "eccentricity" : \
                         {
-                        "min_value" : 0, "max_value": 0.0, 
+                        "min_value" : 0, "max_value": 1.0, 
                         "distribution_type": "uniform"
                         },
                     "mean_periastron_anomaly" : \
                         {"min_value" : 0, 
-                         "max_value": 2*np.pi, 
+                         "max_value":  2*np.pi, 
                          "distribution_type": "uniform"
                         },
                     "spin_1_in" : \
-                        {"min_value" : 0, 
-                         "max_value": 0, 
+                        {"min_value" : -0.5
+                         "max_value": 0.5
                          "distribution_type": "uniform"
                         },
                     "spin_2_in" : \
                         {
-                        "min_value" : 0,
-                        "max_value": 0, 
+                        "min_value" : -0.5,
+                        "max_value": 0.5, 
                         "distribution_type": "uniform"
                         }
                 }
