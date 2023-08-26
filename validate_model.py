@@ -25,19 +25,20 @@ if __name__ == "__main__":
     
     efficiency_config = \
         {
-            "max_snr" : 20.0, 
-            "num_snr_steps" : 11, 
-            "num_examples_per_snr_step" : 8192//8
+            "max_snr" : 15.0, 
+            "num_snr_steps" : 61, 
+            "num_examples_per_snr_step" : 16384
         }
     far_config = \
         {
-            "num_examples" : 1.0E3
+            "num_examples" : 1.0E6
         }
     roc_config : dict = \
         {
-            "num_examples" : 1.0E3,
+            "num_examples" : 1.0E6,
             "snr_ranges" :  [
                 (8.0, 20.0),
+                6.0,
                 8.0,
                 10.0,
                 12.0
@@ -66,72 +67,84 @@ if __name__ == "__main__":
         injection_config = \
             {
                 "type" : "cbc",
-                "snr"  : {
+                "snr"  : \
+                {
                     "min_value" : 8, 
                     "max_value" : 20, 
                     "distribution_type": "uniform"
                 },
                 "injection_chance" : 1.0,
                 "padding_seconds" : {"front" : 0.3, "back" : 0.0},
-                "args" : {
+                "args" : \
+                {
                     "mass_1_msun" : \
-                        {"min_value" : 5, 
-                         "max_value": 95, 
-                         "distribution_type": 
-                         "uniform"},
+                    {
+                        "min_value" : 5, 
+                        "max_value": 95, 
+                        "distribution_type": "uniform"
+                    },
                     "mass_2_msun" : \
-                        {"min_value" : 5, 
-                         "max_value": 95, 
-                         "distribution_type": "uniform"
-                        },
+                    {
+                        "min_value" : 5, 
+                        "max_value": 95, 
+                        "distribution_type": "uniform"
+                    },
                     "sample_rate_hertz" : \
-                        {"value" : sample_rate_hertz,
-                         "distribution_type": "constant"
-                        },
+                    {
+                        "value" : sample_rate_hertz,
+                        "distribution_type": "constant"
+                    },
                     "duration_seconds" : \
-                        {"value" : onsource_duration_seconds, 
-                         "distribution_type": "constant"
-                        },
+                    {
+                        "value" : onsource_duration_seconds, 
+                        "distribution_type": "constant"
+                    },
                     "inclination_radians" : \
-                        {"min_value" : 0, 
-                         "max_value": np.pi, 
-                         "distribution_type": "uniform"
-                        },
+                    {
+                        "min_value" : 0, 
+                        "max_value": np.pi, 
+                        "distribution_type": "uniform"
+                    },
                     "distance_mpc" : \
-                        {"value" : 1000, 
-                         "distribution_type": "constant"
-                        },
+                    {
+                        "value" : 10, 
+                        "distribution_type": "constant"
+                    },
                     "reference_orbital_phase_in" : \
-                        {"min_value" : 0, 
-                         "max_value": 2*np.pi, 
-                         "distribution_type": "uniform"
-                        },
+                    {
+                        "min_value" : 0, 
+                        "max_value": 2*np.pi, 
+                        "distribution_type": "uniform"
+                    },
                     "ascending_node_longitude" : \
-                        {"min_value" : 0, 
-                         "max_value": np.pi,
-                         "distribution_type": "uniform"
-                        },
+                    {
+                        "min_value" : 0, 
+                        "max_value": np.pi,
+                        "distribution_type": "uniform"
+                    },
                     "eccentricity" : \
-                        {
+                    {
                         "min_value" : 0, "max_value": 1.0, 
                         "distribution_type": "uniform"
-                        },
+                    },
                     "mean_periastron_anomaly" : \
-                        {"min_value" : 0, 
-                         "max_value":  2*np.pi, 
-                         "distribution_type": "uniform"
-                        },
+                    {
+                        "min_value" : 0, 
+                        "max_value":  2*np.pi, 
+                        "distribution_type": "uniform"
+                    },
                     "spin_1_in" : \
-                        {"min_value" : -0.5
-                         "max_value": 0.5
-                         "distribution_type": "uniform"
-                        },
+                    {
+                        "min_value" : -0.5,
+                        "max_value": 0.5,
+                        "distribution_type": "uniform"
+                    },
                     "spin_2_in" : \
-                        {
+                    {
                         "min_value" : -0.5,
                         "max_value": 0.5, 
                         "distribution_type": "uniform"
-                        }
+                    }
                 }
             }
         

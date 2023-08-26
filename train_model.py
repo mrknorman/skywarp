@@ -162,9 +162,9 @@ def build_conv_transformer(
         x = layers.Conv1D(filters=model_dim, kernel_size=1, padding='valid', activation='relu')(x)
     else: 
         # Segmenting
-        x = layers.Reshape((input_shape, 1))(inputs)
-        x = layers.Conv1D(filters=model_dim, kernel_size=16, activation="relu", padding = "same")(x)
-        x = layers.MaxPool1D(16)(x) 
+        x = layers.Reshape((-1, model_dim))(inputs)
+        #x = layers.Conv1D(filters=model_dim, kernel_size=16, activation="relu", padding = "same")(x)
+        #x = layers.MaxPool1D(16)(x) 
             
     if (num_transformer_blocks > 0):
         
@@ -230,19 +230,6 @@ if __name__ == "__main__":
     num_test_examples = 10000
     num_validate_examples = 10000
     num_examples_per_batch = 32
-
-    model_config_large = dict(
-        name = "skywarp_conv_attention_large",
-        res_head = False,
-        conv_head = True,
-        head_size=32,
-        num_heads=10,
-        ff_dim=10,
-        num_transformer_blocks=10,
-        mlp_units=[1024],
-        mlp_dropout=0.5,
-        dropout=0.5
-    )
     
     conv_regular = dict(
         name = "skywarp_conv_regular",
@@ -303,6 +290,18 @@ if __name__ == "__main__":
         conv_attention_single
     ]
     
+    test_models = [
+        conv_attention_regular.copy()
+        for i in range(5)
+    ]
+    for i, model_config in enumerate(test_models):
+        model_config.update(
+            {
+                "name" : f"skywarp_conv_attention_{i}_layers",
+                "num_transformer_blocks" : 2*i + 4
+            }
+        )
+    
     test_models = [test_models[model_index]]
             
     training_config = \
@@ -317,34 +316,89 @@ if __name__ == "__main__":
     injection_config = \
         {
             "type" : "cbc",
-            "snr"  : {"min_value" : 10.0, "max_value" : 20.0, "distribution_type": "uniform"},
+            "snr"  : \
+            {
+                "min_value" : 8.0, 
+                "max_value" : 20.0, 
+                "distribution_type": "uniform"
+            },
             "injection_chance" : 0.5,
-            "padding_seconds" : {"front" : 0.3, "back" : 0.0},
-            "args" : {
+            "padding_seconds" : \
+            {
+                "front" : 0.3, 
+                "back" : 0.0
+            },
+            "args" : 
+            {
                 "mass_1_msun" : \
-                    {"min_value" : 5, "max_value": 95, "distribution_type": "uniform"},
+                {
+                    "min_value" : 5, 
+                    "max_value": 95, 
+                    "distribution_type": "uniform"
+                },
                 "mass_2_msun" : \
-                    {"min_value" : 5, "max_value": 95, "distribution_type": "uniform"},
+                {
+                    "min_value" : 5,
+                    "max_value": 95, 
+                    "distribution_type": "uniform"
+                },
                 "sample_rate_hertz" : \
-                    {"value" : sample_rate_hertz, "distribution_type": "constant"},
+                {
+                    "value" : sample_rate_hertz, 
+                    "distribution_type": "constant"
+                },
                 "duration_seconds" : \
-                    {"value" : onsource_duration_seconds, "distribution_type": "constant"},
+                {
+                    "value" : onsource_duration_seconds, 
+                    "distribution_type": "constant"
+                },
                 "inclination_radians" : \
-                    {"min_value" : 0, "max_value": np.pi, "distribution_type": "uniform"},
+                {
+                    "min_value" : 0, 
+                    "max_value": np.pi, 
+                    "distribution_type": "uniform"
+                },
                 "distance_mpc" : \
-                    {"value" : 1000, "distribution_type": "constant"},
+                {
+                    "value" : 1000, 
+                    "distribution_type": "constant"
+                },
                 "reference_orbital_phase_in" : \
-                    {"min_value" : 0, "max_value": 2.0*np.pi, "distribution_type": "uniform"},
+                {
+                    "min_value" : 0, 
+                    "max_value": 2.0*np.pi, 
+                    "distribution_type": "uniform"
+                },
                 "ascending_node_longitude" : \
-                    {"min_value" : 0, "max_value": np.pi, "distribution_type": "uniform"},
+                {
+                    "min_value" : 0, 
+                    "max_value": np.pi, 
+                    "distribution_type": "uniform"
+                },
                 "eccentricity" : \
-                    {"min_value" : 0, "max_value": 0.1, "distribution_type": "uniform"},
+                {
+                    "min_value" : 0, 
+                    "max_value": 0.1, 
+                    "distribution_type": "uniform"
+                },
                 "mean_periastron_anomaly" : \
-                    {"min_value" : 0, "max_value": 2*np.pi, "distribution_type": "uniform"},
+                {
+                    "min_value" : 0, 
+                    "max_value": 2*np.pi, 
+                    "distribution_type": "uniform"
+                },
                 "spin_1_in" : \
-                    {"min_value" : -0.5, "max_value": 0.5, "distribution_type": "uniform"},
+                {
+                    "min_value" : -0.5, 
+                    "max_value": 0.5, 
+                    "distribution_type": "uniform"
+                },
                 "spin_2_in" : \
-                    {"min_value" : -0.5, "max_value": 0.5, "distribution_type": "uniform"}
+                {
+                    "min_value" : -0.5, 
+                    "max_value": 0.5, 
+                    "distribution_type": "uniform"
+                }
             }
         }
         
@@ -375,7 +429,7 @@ if __name__ == "__main__":
     validation_config = injection_config.copy()
     validation_config.update({
             "snr": {
-                "min_value" : 8.0, 
+                "min_value" : 6.0, 
                 "max_value" : 10.0, 
                 "distribution_type": "uniform"
             }
@@ -425,7 +479,13 @@ if __name__ == "__main__":
             def curriculum(epoch):
                 epoch += 1
                 injection_configs[0].update(
-                    {"snr": {"min_value" : np.maximum(10.0, 35.0 - epoch*5.0), "max_value" : np.maximum(20.0, 35.0 - epoch*2.5), "distribution_type": "uniform"}}
+                    {"snr": 
+                        {
+                        "min_value" : np.maximum(10.0, 35.0 - epoch*5.0), 
+                        "max_value" : np.maximum(20.0, 35.0 - epoch*2.5), 
+                        "distribution_type": "uniform"
+                        }
+                    }
                 )
                                 
                 return get_ifo_data_generator(
@@ -487,7 +547,7 @@ if __name__ == "__main__":
             history = model.fit(
                 train_dataset.map(transform_features_labels),
                 validation_data=validation_dataset.map(transform_features_labels),
-                verbose = 2,
+                verbose = 1,
                 epochs=training_config["epochs"],
                 batch_size=training_config["batch_size"],
                 callbacks=callbacks
