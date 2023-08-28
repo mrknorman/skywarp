@@ -471,7 +471,8 @@ if __name__ == "__main__":
             model.compile(
                 loss="sparse_categorical_crossentropy",
                 optimizer=keras.optimizers.Adam(
-                    learning_rate=training_config["learning_rate"]),
+                    learning_rate=training_config["learning_rate"]
+                ),
                 metrics=["sparse_categorical_accuracy"],
             )
             model.summary()
@@ -547,7 +548,7 @@ if __name__ == "__main__":
             history = model.fit(
                 train_dataset.map(transform_features_labels),
                 validation_data=validation_dataset.map(transform_features_labels),
-                verbose = 1,
+                verbose = 2,
                 epochs=training_config["epochs"],
                 batch_size=training_config["batch_size"],
                 callbacks=callbacks
