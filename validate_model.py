@@ -182,7 +182,7 @@ if __name__ == "__main__":
                     model_name,
                     generator_args,
                     num_examples_per_batch,
-                    efficiency_config,
+                    efficiency_config, 
                     far_config,
                     roc_config
                 )

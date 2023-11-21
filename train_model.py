@@ -290,6 +290,7 @@ if __name__ == "__main__":
         conv_attention_single
     ]
     
+    """
     test_models = [
         conv_attention_regular.copy()
         for i in range(5)
@@ -301,6 +302,7 @@ if __name__ == "__main__":
                 "num_transformer_blocks" : 2*i + 4
             }
         )
+    """
     
     test_models = [test_models[model_index]]
             
@@ -519,11 +521,12 @@ if __name__ == "__main__":
                     self.model.fit(
                         train_dataset.map(transform_features_labels),
                         initial_epoch = epoch +1,
-                        verbose = 2,
+                        verbose = 1,
                         validation_data=validation_dataset.map(transform_features_labels),
                         epochs=training_config["epochs"],
                         batch_size=training_config["batch_size"],
-                        callbacks=callbacks
+                        callbacks=callbacks,
+                        num_steps = num_validate_examples//num_examples_per_batch
                     ) # Continue training with the new dataset
                     self.model.stop_training = False  # Allow normal training process to continue
                     
@@ -548,7 +551,7 @@ if __name__ == "__main__":
             history = model.fit(
                 train_dataset.map(transform_features_labels),
                 validation_data=validation_dataset.map(transform_features_labels),
-                verbose = 2,
+                verbose = 1,
                 epochs=training_config["epochs"],
                 batch_size=training_config["batch_size"],
                 callbacks=callbacks
