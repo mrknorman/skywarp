@@ -1,6 +1,5 @@
 import tensorflow as tf
 from tqdm import tqdm
-import tensorflow_datasets as tfds
 from functools import partial
 
 from tensorflow.keras import mixed_precision
@@ -479,6 +478,8 @@ if __name__ == "__main__":
             )
             model.summary()
             
+            continue
+            
             def curriculum(epoch):
                 epoch += 1
                 injection_configs[0].update(
@@ -557,8 +558,6 @@ if __name__ == "__main__":
                 callbacks=callbacks
             )
             
-            print(history)
-
             model.save(model_path)
 
             plt.figure()
