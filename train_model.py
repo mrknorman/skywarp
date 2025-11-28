@@ -16,14 +16,65 @@ from tensorflow.keras import layers
 
 import matplotlib.pyplot as plt
 
-from py_ml_tools.dataset import get_ifo_data_generator, O3
-from py_ml_tools.setup   import setup_cuda, find_available_GPUs
+import sys
+import os
+
+import gravyflow as gf
 
 from tensorflow.data.experimental import AutoShardPolicy
 
 import os
 
 from tensorflow.keras.callbacks import Callback
+
+def binary_focal_loss(gamma=2.0, alpha=0.25, fp_penalty=1.0, signal_smoothing=0.1):
+    """
+    Combines three SOTA techniques into one loss function:
+    1. Focal Loss: Focuses on hard examples (glitches/low SNR).
+    2. Asymmetric Penalty: Punishes False Positives (Noise predicted as Signal) 
+       'fp_penalty' times more than Missed Signals.
+    3. One-Sided Smoothing: Smooths Signal labels (1 -> 0.9) to prevent overfitting,
+       but keeps Noise labels at 0 to strictly minimize False Positives.
+    """
+    def loss_fn(y_true, y_pred):
+        # 1. Apply One-Sided Label Smoothing manually
+        # If y_true is 1, it becomes (1 - 0.1) = 0.9
+        # If y_true is 0, it stays 0.
+        # This is safer for Low-FP tasks than standard smoothing.
+        y_true_smooth = tf.where(
+            y_true > 0.5, 
+            1.0 - signal_smoothing, 
+            0.0
+        )
+
+        epsilon = tf.keras.backend.epsilon()
+        y_pred = tf.clip_by_value(y_pred, epsilon, 1.0 - epsilon)
+
+        # 2. Calculate Cross Entropy terms
+        # Log of the probability that it IS a signal
+        ce_signal = -y_true_smooth * tf.math.log(y_pred)
+        # Log of the probability that it IS noise
+        ce_noise = -(1 - y_true_smooth) * tf.math.log(1 - y_pred)
+        
+        # 3. Calculate Focal Weights
+        # If truth is Signal, weight = (1 - pred)^gamma
+        weight_signal = alpha * tf.math.pow(1 - y_pred, gamma)
+        # If truth is Noise, weight = (pred)^gamma
+        weight_noise = (1 - alpha) * tf.math.pow(y_pred, gamma)
+        
+        # 4. Combine and Apply Asymmetric Penalty
+        loss_signal = weight_signal * ce_signal
+        
+        # Apply penalty ONLY to the noise term (The False Positive Risk)
+        loss_noise = weight_noise * ce_noise * fp_penalty 
+        
+        return tf.reduce_mean(loss_signal + loss_noise)
+
+    return loss_fn
+
+def adjust_features(features, labels):
+    labels['INJECTION_MASKS'] = labels['INJECTION_MASKS'][0]
+    return features, labels
 
 def residual_block(inputs, kernel_size, num_kernels, num_layers):
     x = inputs
@@ -46,22 +97,48 @@ def identity_block(inputs, kernel_size, num_kernels, num_layers):
     return x + inputs
 
 def transformer_encoder(inputs, head_size, num_heads, ff_dim, dropout=0):
-    # Normalization and Attention
+    """
+    Modernized Transformer Encoder Block (ViT Style).
+    Changes:
+    1. Uses GELU activation (Standard for SOTA Transformers).
+    2. Explicitly casts MLP projection to prevent bottlenecking if ff_dim is set wrong.
+    """
+    # Calculate the model dimension automatically
+    model_dim = inputs.shape[-1]
+    
+    # --- Sub-layer 1: Multi-Head Self-Attention ---
+    # Pre-Norm architecture (Norm -> Attention -> Add) is more stable than Post-Norm
     x = layers.LayerNormalization(epsilon=1e-6)(inputs)
+    
     x = layers.MultiHeadAttention(
-        key_dim=head_size, num_heads=num_heads, dropout=dropout
-    )(x, x)
+        key_dim=head_size, 
+        num_heads=num_heads, 
+        dropout=dropout
+    )(x, x) # Self-Attention: Query=x, Value=x
+    
+    # Stochastic Depth could be added here for very deep models, 
+    # but Dropout is fine for now.
     x = layers.Dropout(dropout)(x)
+    
+    # Residual Connection
     res = x + inputs
 
-    # Feed Forward Part
+    # --- Sub-layer 2: Feed Forward Network (MLP) ---
     x = layers.LayerNormalization(epsilon=1e-6)(res)
-    # Conv1D(filters=ff_dim, kernel_size=1, activation="relu")
-    x = layers.Dense(ff_dim, activation="relu")(x)
+    
+    # CRITICAL FIX: Ensure ff_dim is an expansion, not a bottleneck.
+    # If the config passed a small number, we override it to 4x model_dim
+    # standard ViT expansion ratio is 4.
+    actual_ff_dim = max(ff_dim, 4 * model_dim) 
+    
+    # Expansion Layer (Wide)
+    x = layers.Dense(actual_ff_dim, activation="gelu")(x) 
     x = layers.Dropout(dropout)(x)
-    # Conv1D((filters=inputs.shape[-1], kernel_size=1))
-    x = layers.Dense(inputs.shape[-1])(x)
+    
+    # Projection Layer (Narrow) - Project back to model_dim
+    x = layers.Dense(model_dim)(x)
     x = layers.Dropout(dropout)(x)
+    
     return x + res
 
 def positional_enc(seq_len: int, model_dim: int) -> tf.Tensor:
@@ -92,16 +169,74 @@ def residual_block(inputs, kernel_size, num_kernels, num_layers):
     return x + inputs
 
 def build_cnn_head(input_shape, x):
-    x = layers.Reshape((input_shape, 1))(x)
-    x = layers.Conv1D(64, 8, activation="relu", padding = "same")(x)
-    x = layers.MaxPool1D(8)(x)
-    x = layers.Conv1D(32, 8, activation="relu", padding = "same")(x)
-    x = layers.Conv1D(32, 16, activation="relu", padding = "same")(x)
-    x = layers.MaxPool1D(6)(x)
-    x = layers.Conv1D(16, 16, activation="relu", padding = "same")(x)
-    x = layers.Conv1D(16, 32, activation="relu", padding = "same")(x)
-    x = layers.Conv1D(16, 32, activation="relu", padding = "same")(x)
+    """
+    Implements a ConvNeXt-1D architecture optimized for Gravitational Wave (GW) data.
     
+    Why this is SOTA for GW:
+    1. Large Kernels (7x7): Captures long-range dependencies (the "chirp" evolution) 
+       better than standard 3x3 VGG filters.
+    2. Depthwise Separable Convs: Reduces parameters allow for a deeper network.
+    3. Inverted Bottleneck: Expands channels 4x internally to learn complex features, 
+       then projects back, preserving information flow.
+    """
+    
+    # --- Configuration for ConvNeXt-Tiny (Scaled for Audio/1D) ---
+    # Depths: Number of blocks per stage. [3, 3, 9, 3] is standard "Tiny".
+    # Dims: Channel widths. [96, 192, 384, 768] is standard. 
+    # Adjusted slightly for GW memory constraints:
+    depths = [3, 3, 9, 3] 
+    dims = [64, 128, 256, 512] 
+    
+    # --- Helper: The ConvNeXt Block ---
+    def convnext_block(x, dim):
+        shortcut = x
+        
+        # 1. Depthwise Conv (Spatial mixing) - Large Receptive Field
+        # We use kernel_size=7 to mimic the global view of Transformers
+        x = layers.Conv1D(filters=dim, kernel_size=7, padding="same", groups=dim)(x)
+        x = layers.LayerNormalization(epsilon=1e-6)(x)
+        
+        # 2. Pointwise Conv (Channel mixing) - Expand 4x
+        # Inverted Bottleneck design
+        x = layers.Dense(4 * dim)(x) # Dense acts as Conv1D(kernel=1) here
+        x = layers.Activation("gelu")(x)
+        
+        # 3. Pointwise Conv (Channel mixing) - Project back
+        x = layers.Dense(dim)(x)
+        
+        # 4. Residual Connection
+        # Using a simple scaling factor (LayerScale) is common in SOTA, 
+        # but simple addition works well for this scale.
+        x = layers.Add()([shortcut, x])
+        return x
+
+    # --- Helper: Downsampling Layer ---
+    def downsample_layer(x, dim):
+        x = layers.LayerNormalization(epsilon=1e-6)(x)
+        # Stride 2 reduces time resolution by half
+        x = layers.Conv1D(filters=dim, kernel_size=2, strides=2)(x)
+        return x
+
+    # --- Main Architecture Flow ---
+    
+    # 1. Stem: "Patchify" the input
+    # Standard ConvNeXt uses stride 4. For GW data at 2048Hz, this
+    # reduces the sequence length immediately to save compute.
+    x = layers.Reshape((input_shape, 1))(x)
+    x = layers.Conv1D(dims[0], kernel_size=4, strides=4)(x)
+    x = layers.LayerNormalization(epsilon=1e-6)(x)
+    
+    # 2. Stages
+    # Loop through the 4 stages defined in 'depths' and 'dims'
+    for i in range(4):
+        # Apply blocks
+        for _ in range(depths[i]):
+            x = convnext_block(x, dims[i])
+            
+        # Apply downsampling (except after the very last stage)
+        if i < 3:
+            x = downsample_layer(x, dims[i+1])
+            
     return x
 
 def build_resnet_head(input_shape, x):
@@ -120,19 +255,20 @@ def build_dense_tail(model_config, x):
     mlp_units = model_config["mlp_units"]
     mlp_dropout = model_config["mlp_dropout"]
     
-    x = layers.Flatten()(x)
-    x = tf.cast(x, dtype=tf.float32)
+    x = layers.GlobalAveragePooling1D(data_format="channels_last")(x) 
+    x = layers.Lambda(lambda t: tf.cast(t, dtype=tf.float32))(x)
     
     for dim in mlp_units:
         x = layers.Dense(dim, activation="relu", dtype=tf.float32)(x)
         x = layers.Dropout(mlp_dropout)(x)
         
-    x = layers.Dense(2, activation="softmax", dtype=tf.float32, name = "injection_masks")(x)
+    x = layers.Dense(1, activation="sigmoid", dtype=tf.float32, name = "injection_masks")(x)
     
     return x
 
 def build_conv_transformer(
     input_shape,
+    offsource_shape,
     config,
     res_net = False
 ):
@@ -147,21 +283,34 @@ def build_conv_transformer(
     res_head = config["res_head"]
     conv_head = config["conv_head"]
     
-    inputs = keras.Input(shape=input_shape, name='onsource')
+    inputs = keras.Input(shape=input_shape, name='ONSOURCE')
+    offsource_input = keras.Input(shape=offsource_shape, name='OFFSOURCE')
+    
+    # Whitening
+    sample_rate_hertz = config.get("sample_rate_hertz", 2048.0)
+    onsource_duration_seconds = config.get("onsource_duration_seconds", 1.0)
+    
+    x = gf.Whiten(
+        sample_rate_hertz=sample_rate_hertz,
+        onsource_duration_seconds=onsource_duration_seconds,
+        dtype='float32'
+    )([inputs, offsource_input])
+    
+    whitened_length = int(np.ceil(onsource_duration_seconds * sample_rate_hertz))
     
     model_dim = num_heads * head_size
     
     if (res_head):
-        x = build_resnet_head(input_shape, inputs)
+        x = build_resnet_head(whitened_length, x) # Pass length
         # Embedd to higher dimensionality to increase the size of the model    
-        x = layers.Conv1D(filters=model_dim, kernel_size=1, padding='valid', activation='relu')(x)
+        x = layers.Conv1D(filters=model_dim, kernel_size=1, padding='valid', activation='gelu')(x)
     elif (conv_head):
-        x = build_cnn_head(input_shape, inputs)
+        x = build_cnn_head(whitened_length, x)
         # Embedd to higher dimensionality to increase the size of the model    
-        x = layers.Conv1D(filters=model_dim, kernel_size=1, padding='valid', activation='relu')(x)
+        x = layers.Conv1D(filters=model_dim, kernel_size=1, padding='valid', activation='gelu')(x)
     else: 
         # Segmenting
-        x = layers.Reshape((-1, model_dim))(inputs)
+        x = layers.Reshape((-1, model_dim))(x) # Use x from whiten
         #x = layers.Conv1D(filters=model_dim, kernel_size=16, activation="relu", padding = "same")(x)
         #x = layers.MaxPool1D(16)(x) 
             
@@ -177,31 +326,9 @@ def build_conv_transformer(
         for _ in range(num_transformer_blocks):
             x = transformer_encoder(x, head_size, num_heads, ff_dim, dropout)
 
-        x = layers.GlobalAveragePooling1D(data_format="channels_first")(x)
-    
     outputs = build_dense_tail(model_config, x)
-    return keras.Model(inputs, outputs)
+    return keras.Model(inputs=[inputs, offsource_input], outputs=outputs)
 
-def lr_scheduler(
-        epoch, 
-        lr, 
-        warmup_epochs=15, 
-        decay_epochs=100, 
-        initial_lr=1e-6, 
-        base_lr=1e-3,
-        min_lr=5e-5
-    ):
-    
-    if epoch <= warmup_epochs:
-        pct = epoch / warmup_epochs
-        return ((base_lr - initial_lr) * pct) + initial_lr
-
-    if epoch > warmup_epochs and epoch < warmup_epochs+decay_epochs:
-        pct = 1 - ((epoch - warmup_epochs) / decay_epochs)
-        return ((base_lr - min_lr) * pct) + min_lr
-
-    return min_lr
-    
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="A simple argument parser")
@@ -211,8 +338,7 @@ if __name__ == "__main__":
     
     model_index = args.model_index
     
-    gpus = find_available_GPUs(10000, 1)
-    strategy = setup_cuda(gpus, 8000, verbose = True)
+    strategy = gf.env(memory_to_allocate_tf=8000)
             
     policy = mixed_precision.Policy('mixed_float16')
     mixed_precision.set_global_policy(policy)
@@ -260,12 +386,12 @@ if __name__ == "__main__":
         name = "skywarp_conv_attention_regular",
         res_head = False,
         conv_head = True,
-        head_size=16,
+        head_size=32,
         num_heads=8,
-        ff_dim=8,
+        ff_dim=1024,
         num_transformer_blocks=6,
         mlp_units=[64],
-        mlp_dropout=0.5,
+        mlp_dropout=0.1,
         dropout=0.5
     )
     
@@ -273,12 +399,12 @@ if __name__ == "__main__":
         name = "skywarp_conv_attention_single",
         res_head = False,
         conv_head = True,
-        head_size=16,
+        head_size=32,
         num_heads=8,
-        ff_dim=8,
+        ff_dim=1024,
         num_transformer_blocks=1,
         mlp_units=[64],
-        mlp_dropout=0.5,
+        mlp_dropout=0.1,
         dropout=0.5
     )
     
@@ -313,202 +439,194 @@ if __name__ == "__main__":
             batch_size=num_examples_per_batch
         )
 
-    # Load Dataset:
-    injection_config = \
-        {
-            "type" : "cbc",
-            "snr"  : \
-            {
-                "min_value" : 8.0, 
-                "max_value" : 20.0, 
-                "distribution_type": "uniform"
-            },
-            "injection_chance" : 0.5,
-            "padding_seconds" : \
-            {
-                "front" : 0.3, 
-                "back" : 0.0
-            },
-            "args" : 
-            {
-                "mass_1_msun" : \
-                {
-                    "min_value" : 5, 
-                    "max_value": 95, 
-                    "distribution_type": "uniform"
-                },
-                "mass_2_msun" : \
-                {
-                    "min_value" : 5,
-                    "max_value": 95, 
-                    "distribution_type": "uniform"
-                },
-                "sample_rate_hertz" : \
-                {
-                    "value" : sample_rate_hertz, 
-                    "distribution_type": "constant"
-                },
-                "duration_seconds" : \
-                {
-                    "value" : onsource_duration_seconds, 
-                    "distribution_type": "constant"
-                },
-                "inclination_radians" : \
-                {
-                    "min_value" : 0, 
-                    "max_value": np.pi, 
-                    "distribution_type": "uniform"
-                },
-                "distance_mpc" : \
-                {
-                    "value" : 1000, 
-                    "distribution_type": "constant"
-                },
-                "reference_orbital_phase_in" : \
-                {
-                    "min_value" : 0, 
-                    "max_value": 2.0*np.pi, 
-                    "distribution_type": "uniform"
-                },
-                "ascending_node_longitude" : \
-                {
-                    "min_value" : 0, 
-                    "max_value": np.pi, 
-                    "distribution_type": "uniform"
-                },
-                "eccentricity" : \
-                {
-                    "min_value" : 0, 
-                    "max_value": 0.1, 
-                    "distribution_type": "uniform"
-                },
-                "mean_periastron_anomaly" : \
-                {
-                    "min_value" : 0, 
-                    "max_value": 2*np.pi, 
-                    "distribution_type": "uniform"
-                },
-                "spin_1_in" : \
-                {
-                    "min_value" : -0.5, 
-                    "max_value": 0.5, 
-                    "distribution_type": "uniform"
-                },
-                "spin_2_in" : \
-                {
-                    "min_value" : -0.5, 
-                    "max_value": 0.5, 
-                    "distribution_type": "uniform"
-                }
-            }
-        }
+    # IFO Data Obtainer
+    ifo_data_obtainer = gf.IFODataObtainer(
+        observing_runs=gf.ObservingRun.O3,
+        data_quality=gf.DataQuality.BEST,
+        data_labels=[gf.DataLabel.NOISE, gf.DataLabel.GLITCHES],
+        segment_order=gf.SegmentOrder.RANDOM,
+        force_acquisition=True,
+        cache_segments=False
+    )
+
+    # Noise Obtainer
+    noise = gf.NoiseObtainer(
+        ifo_data_obtainer=ifo_data_obtainer,
+        noise_type=gf.NoiseType.REAL,
+        ifos=gf.IFO.L1
+    )
+
+    # Scaling Method (SNR)
+    scaling_method = gf.ScalingMethod(
+        value=gf.Distribution(min_=4.0, max_=50.0, type_=gf.DistributionType.UNIFORM),
+        type_=gf.ScalingTypes.SNR
+    )
+
+    # Waveform Generator Distributions
+    mass_1_distribution = gf.Distribution(min_=5.0, max_=95.0, type_=gf.DistributionType.UNIFORM)
+    mass_2_distribution = gf.Distribution(min_=5.0, max_=95.0, type_=gf.DistributionType.UNIFORM)
+    inclination_distribution = gf.Distribution(min_=0.0, max_=np.pi, type_=gf.DistributionType.UNIFORM)
+    
+    # Waveform Generator
+    phenom_d_generator = gf.cuPhenomDGenerator(
+        mass_1_msun=mass_1_distribution,
+        mass_2_msun=mass_2_distribution,
+        inclination_radians=inclination_distribution,
+        scaling_method=scaling_method,
+        injection_chance=0.5
+    )
+
+    def adjust_features(features, labels):
+        # Map uppercase key to lowercase key to match model output name
+        # INJECTION_MASKS has shape (num_generators, batch_size) -> (1, 32)
+        # We want (batch_size, 1) -> (32, 1) for binary_crossentropy
         
-    injection_configs = [injection_config]
-    
-    generator_args = {
-        "time_interval" : O3,
-        "data_labels" : ["noise", "glitches"],
-        "ifo" : "L1",
-        "injection_configs" : injection_configs,
-        "sample_rate_hertz" : sample_rate_hertz,
-        "onsource_duration_seconds" : onsource_duration_seconds,
-        "max_segment_size" : max_segment_duration_seconds,
-        "num_examples_per_batch" : num_examples_per_batch,
-        "data_directory" : data_directory_path,
-        "order" : "random",
-        "seed" : 100,
-        "apply_whitening" : True,
-        "input_keys" : ["onsource"], 
-        "output_keys" : ["injection_masks"],
-        "save_segment_data" : True
-    }
-    
-    train_dataset = get_ifo_data_generator(
-        **generator_args
-    ).with_options(options).take(num_train_examples//num_examples_per_batch)
-    
-    validation_config = injection_config.copy()
-    validation_config.update({
-            "snr": {
-                "min_value" : 6.0, 
-                "max_value" : 10.0, 
-                "distribution_type": "uniform"
-            }
-    })
-    generator_args.update({
-        "injection_configs" : [validation_config],
-        "seed" : 101
-    })    
+        # Transpose and cast
+        labels['injection_masks'] = tf.cast(tf.transpose(labels['INJECTION_MASKS']), tf.float32)
         
-    test_dataset = get_ifo_data_generator(
-        **generator_args
-    ).with_options(options).take(num_test_examples//num_examples_per_batch)
-    
-    generator_args.update({"seed" : 102})
-    
-    validation_dataset = get_ifo_data_generator(
-        **generator_args
-    ).with_options(options).take(num_validate_examples//num_examples_per_batch)
-    
-    def transform_features_labels(features, labels):
-        labels['injection_masks'] = labels['injection_masks'][0]
+        # Remove the old key to ensure Keras uses the new one
+        del labels['INJECTION_MASKS']
+        
         return features, labels
+
+    # Training Dataset
+    train_dataset = gf.Dataset(
+        noise_obtainer=noise,
+        waveform_generators=phenom_d_generator,
+        sample_rate_hertz=sample_rate_hertz,
+        onsource_duration_seconds=onsource_duration_seconds,
+        num_examples_per_batch=num_examples_per_batch,
+        input_variables=[gf.ReturnVariables.ONSOURCE, gf.ReturnVariables.OFFSOURCE],
+        output_variables=[gf.ReturnVariables.INJECTION_MASKS]
+    ).map(adjust_features).take(num_train_examples // num_examples_per_batch)
+
+    # Validation Dataset
+    # Create a new scaling method for validation with different SNR range
+    validation_scaling_method = gf.ScalingMethod(
+        value=gf.Distribution(min_=6.0, max_=10.0, type_=gf.DistributionType.UNIFORM),
+        type_=gf.ScalingTypes.SNR
+    )
+    
+    validation_generator = gf.cuPhenomDGenerator(
+        mass_1_msun=mass_1_distribution,
+        mass_2_msun=mass_2_distribution,
+        inclination_radians=inclination_distribution,
+        scaling_method=validation_scaling_method,
+        injection_chance=0.5
+    )
+
+    validation_dataset = gf.Dataset(
+        noise_obtainer=noise,
+        waveform_generators=validation_generator,
+        seed=101,
+        group="validate",
+        sample_rate_hertz=sample_rate_hertz,
+        onsource_duration_seconds=onsource_duration_seconds,
+        num_examples_per_batch=num_examples_per_batch,
+        input_variables=[gf.ReturnVariables.ONSOURCE, gf.ReturnVariables.OFFSOURCE],
+        output_variables=[gf.ReturnVariables.INJECTION_MASKS]
+    ).map(adjust_features).take(num_validate_examples // num_examples_per_batch)
+
+    # Test Dataset
+    test_dataset = gf.Dataset(
+        noise_obtainer=noise,
+        waveform_generators=phenom_d_generator, # Use original generator or specific test config
+        seed=102,
+        group="test",
+        sample_rate_hertz=sample_rate_hertz,
+        onsource_duration_seconds=onsource_duration_seconds,
+        num_examples_per_batch=num_examples_per_batch,
+        input_variables=[gf.ReturnVariables.ONSOURCE, gf.ReturnVariables.OFFSOURCE],
+        output_variables=[gf.ReturnVariables.INJECTION_MASKS]
+    ).map(adjust_features).take(num_test_examples // num_examples_per_batch)
+    
+    # Get shapes from dataset
+    for input_example, _ in train_dataset.take(1):
+        input_shape = input_example["ONSOURCE"].shape[1:]
+        offsource_shape = input_example["OFFSOURCE"].shape[1:]
+
+    # Alias adjust_features to transform_features_labels for compatibility with existing loop if needed, 
+    # but better to update the loop.
+    transform_features_labels = adjust_features
+
     
     # Get Signal Element Shape:
-    input_shape = int(np.ceil(onsource_duration_seconds*sample_rate_hertz))
+    # input_shape = (int(np.ceil(onsource_duration_seconds*sample_rate_hertz)),)
 
-    with strategy.scope():        
+    with strategy:        
         for model_config in test_models:
             
             model_name = model_config["name"]
-            model_path = f"{data_directory_path}/models/{model_name}"
+            model_path = f"{data_directory_path}/models/{model_name}.keras"
+            
+            model_config.update({
+                "sample_rate_hertz": sample_rate_hertz,
+                "onsource_duration_seconds": onsource_duration_seconds
+            })
             
             model = \
                 build_conv_transformer(
                     input_shape,
+                    offsource_shape,
                     model_config
                 )
                     
+            # Define the schedule
+            total_steps = int(num_train_examples / num_examples_per_batch) * training_config["epochs"]
+            warmup_steps = int(0.1 * total_steps) # Warmup for 10% of training
+
+            # Cosine Decay with Warmup
+            learning_rate_fn = tf.keras.optimizers.schedules.CosineDecay(
+                initial_learning_rate=training_config["learning_rate"],
+                decay_steps=total_steps,
+                alpha=0.0, # Minimum LR at the very end
+                warmup_target=training_config["learning_rate"],
+                warmup_steps=warmup_steps
+            )
+
+            # Pass this 'learning_rate_fn' into AdamW instead of a static number
+            optimizer = tf.keras.optimizers.AdamW(
+                learning_rate=learning_rate_fn, # <--- HERE
+                weight_decay=1e-2
+            )
+
             model.compile(
-                loss="sparse_categorical_crossentropy",
-                optimizer=keras.optimizers.Adam(
-                    learning_rate=training_config["learning_rate"]
-                ),
-                metrics=["sparse_categorical_accuracy"],
+                loss=binary_focal_loss(gamma=2.0, alpha=0.25),
+                optimizer=optimizer,
+                metrics=["accuracy", "precision"],
             )
             model.summary()
             
-            continue
-            
             def curriculum(epoch):
                 epoch += 1
-                injection_configs[0].update(
-                    {"snr": 
-                        {
-                        "min_value" : np.maximum(10.0, 35.0 - epoch*5.0), 
-                        "max_value" : np.maximum(20.0, 35.0 - epoch*2.5), 
-                        "distribution_type": "uniform"
-                        }
-                    }
+                
+                # Update SNR
+                min_snr = np.maximum(10.0, 35.0 - epoch*5.0)
+                max_snr = np.maximum(20.0, 35.0 - epoch*2.5)
+                
+                new_scaling_method = gf.ScalingMethod(
+                    value=gf.Distribution(min_=min_snr, max_=max_snr, type_=gf.DistributionType.UNIFORM),
+                    type_=gf.ScalingTypes.SNR
                 )
-                                
-                return get_ifo_data_generator(
-                    time_interval = O3,
-                    data_labels = ["noise", "glitches"],
-                    ifo = "L1",
-                    injection_configs = injection_configs,
-                    sample_rate_hertz = sample_rate_hertz,
-                    onsource_duration_seconds = onsource_duration_seconds,
-                    max_segment_size = max_segment_duration_seconds,
-                    num_examples_per_batch = num_examples_per_batch,
-                    data_directory = data_directory_path,
-                    order = "random",
+                
+                new_generator = gf.cuPhenomDGenerator(
+                    mass_1_msun=mass_1_distribution,
+                    mass_2_msun=mass_2_distribution,
+                    inclination_radians=inclination_distribution,
+                    scaling_method=new_scaling_method,
+                    injection_chance=0.5
+                )
+                
+                return gf.Dataset(
+                    noise_obtainer=noise,
+                    waveform_generators=new_generator,
                     seed = 102 + epoch,
-                    apply_whitening = True,
-                    input_keys = ["onsource"], 
-                    output_keys = ["injection_masks"],
-                    save_segment_data = True
-                ).with_options(options).take(num_validate_examples//num_examples_per_batch)
+                    sample_rate_hertz=sample_rate_hertz,
+                    onsource_duration_seconds=onsource_duration_seconds,
+                    num_examples_per_batch=num_examples_per_batch,
+                    input_variables=[gf.ReturnVariables.ONSOURCE, gf.ReturnVariables.OFFSOURCE],
+                    output_variables=[gf.ReturnVariables.INJECTION_MASKS]
+                ).map(adjust_features).take(num_validate_examples//num_examples_per_batch)
             
             class ModifyDatasetCallback(Callback):
                 def __init__(self, train_dataset_function):
@@ -520,10 +638,10 @@ if __name__ == "__main__":
                     new_dataset = self.train_dataset_function(epoch)  # Create a new dataset
                     
                     self.model.fit(
-                        train_dataset.map(transform_features_labels),
+                        new_dataset,
                         initial_epoch = epoch +1,
                         verbose = 1,
-                        validation_data=validation_dataset.map(transform_features_labels),
+                        validation_data=validation_dataset,
                         epochs=training_config["epochs"],
                         batch_size=training_config["batch_size"],
                         callbacks=callbacks,
@@ -550,8 +668,8 @@ if __name__ == "__main__":
             ]
 
             history = model.fit(
-                train_dataset.map(transform_features_labels),
-                validation_data=validation_dataset.map(transform_features_labels),
+                train_dataset,
+                validation_data=validation_dataset,
                 verbose = 1,
                 epochs=training_config["epochs"],
                 batch_size=training_config["batch_size"],
@@ -579,5 +697,15 @@ if __name__ == "__main__":
             plt.savefig(f"{data_directory_path}/plots/loss_history_{model_name}")
 
             print(
-                model.evaluate(test_dataset.map(transform_features_labels), verbose=1) 
+                model.evaluate(test_dataset, verbose=1) 
+            )     
+            plt.plot(history.history['val_loss'])
+            plt.title('model loss')
+            plt.ylabel('loss')
+            plt.xlabel('epoch')
+            plt.legend(['train', 'validation'], loc='upper left')
+            plt.savefig(f"{data_directory_path}/plots/loss_history_{model_name}")
+
+            print(
+                model.evaluate(test_dataset, verbose=1) 
             )
